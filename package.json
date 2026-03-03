@@ -1,0 +1,21 @@
+{
+  "name": "learning_scheduler",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "dev": "concurrently --names \"next,api,worker,redis\" --prefix-colors \"cyan,green,yellow,magenta\" \"npm run dev --prefix frontend\" \"npm run api\" \"npm run worker\" \"npm run redis\"",
+    "api": "cd backend && uv run uvicorn main:app --reload",
+    "worker": "cd backend && uv run celery -A tasks.celery_app worker --loglevel=info --concurrency=2",
+    "redis": "redis-server"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.1.18",
+    "concurrently": "^9.2.1",
+    "tailwindcss": "^4.1.18"
+  }
+}

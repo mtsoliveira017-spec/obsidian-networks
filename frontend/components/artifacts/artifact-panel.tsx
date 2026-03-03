@@ -1,0 +1,464 @@
+'use client'
+
+import { useEffect, useRef, useState } from 'react'
+import { ENVIRONMENT_OPTIONS, type HardwareTier } from '@/lib/environment'
+import { useEnvironment } from '@/hooks/use-environment'
+import {
+  getDatasetAnalysis,
+  getArtifactStatus,
+  downloadNotebook,
+  downloadModelFile,
+  triggerCompile,
+  type DatasetAnalysis,
+  type ArtifactStatus,
+} from '@/app/api/platform'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { Separator } from '@/components/ui/separator'
+import { Badge } from '@/components/ui/badge'
+import {
+  NotebookText, Brain, Monitor, Cpu,
+  Table2, Clock, Type, ImageIcon,
+  AlertTriangle, CheckCircle2,
+  Download, Play, XCircle,
+} from 'lucide-react'
+
+const TYPE_CONFIG: Record<string, { label: string; Icon: React.ElementType; color: string }> = {
+  tabular     : { label: 'Tabular',      Icon: Table2,    color: 'text-[#39FF14] border-[#39FF14]/30 bg-[#39FF14]/10' },
+  time_series : { label: 'Time Series',  Icon: Clock,     color: 'text-sky-400 border-sky-400/30 bg-sky-400/10' },
+  nlp         : { label: 'NLP',          Icon: Type,      color: 'text-violet-400 border-violet-400/30 bg-violet-400/10' },
+  image       : { label: 'Image',        Icon: ImageIcon, color: 'text-orange-400 border-orange-400/30 bg-orange-400/10' },
+}
+
+const TASK_LABEL: Record<string, string> = {
+  binary_classification    : 'Binary classif.',
+  multiclass_classification: 'Multi-class',
+  regression               : 'Regression',
+}
+
+function DatasetSummaryCard({ analysis }: { analysis: DatasetAnalysis }) {
+  const cfg        = TYPE_CONFIG[analysis.dataset_type] ?? TYPE_CONFIG.tabular
+  const TypeIcon   = cfg.Icon
+  const missingPct = (analysis.fraction_missing * 100).toFixed(1)
+  const catPct     = (analysis.fraction_categorical * 100).toFixed(0)
+
+  return (
+    <div className="rounded-lg border border-zinc-800 bg-zinc-900/60 p-4 space-y-3">
+
+      {/* Header: type badge + task */}
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5">
+          <TypeIcon className={`h-3.5 w-3.5 ${cfg.color.split(' ')[0]}`} />
+          <span className={`rounded border px-1.5 py-0.5 text-[10px] font-medium ${cfg.color}`}>
+            {cfg.label}
+          </span>
+        </div>
+        <span className="text-[10px] text-zinc-500">{TASK_LABEL[analysis.task_type] ?? analysis.task_type}</span>
+      </div>
+
+      {/* Row / feature counts */}
+      <div className="flex items-center gap-4 text-sm">
+        <div>
+          <p className="text-xs text-zinc-500">Rows</p>
+          <p className="font-mono font-medium text-zinc-200">{analysis.n_rows.toLocaleString()}</p>
+        </div>
+        <div>
+          <p className="text-xs text-zinc-500">Features</p>
+          <p className="font-mono font-medium text-zinc-200">{analysis.n_features}</p>
+        </div>
+        <div>
+          <p className="text-xs text-zinc-500">Classes</p>
+          <p className="font-mono font-medium text-zinc-200">{analysis.n_classes}</p>
+        </div>
+      </div>
+
+      {/* Target column */}
+      <div className="flex items-center justify-between text-xs">
+        <span className="text-zinc-500">Target</span>
+        <code className="rounded bg-zinc-800 px-1.5 py-0.5 text-[11px] text-[#39FF14]/80 max-w-[60%] truncate">
+          {analysis.target_col}
+        </code>
+      </div>
+
+      <Separator className="bg-zinc-800" />
+
+      {/* Quality flags */}
+      <div className="space-y-1.5">
+        <p className="text-[10px] font-medium uppercase tracking-wider text-zinc-600">Quality</p>
+
+        <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
+          <div className="flex items-center gap-1.5">
+            {analysis.fraction_missing > 0.05
+              ? <AlertTriangle className="h-3 w-3 text-amber-400 shrink-0" />
+              : <CheckCircle2 className="h-3 w-3 text-[#39FF14]/60 shrink-0" />}
+            <span className="text-zinc-400">Missing</span>
+            <span className="ml-auto font-mono text-zinc-300">{missingPct}%</span>
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            {(analysis.class_imbalance_ratio ?? 1) > 5
+              ? <AlertTriangle className="h-3 w-3 text-amber-400 shrink-0" />
+              : <CheckCircle2 className="h-3 w-3 text-[#39FF14]/60 shrink-0" />}
+            <span className="text-zinc-400">Imbalance</span>
+            <span className="ml-auto font-mono text-zinc-300">
+              {analysis.class_imbalance_ratio != null ? `${analysis.class_imbalance_ratio}×` : 'n/a'}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-1.5 col-span-2">
+            <span className="text-zinc-400">Categorical</span>
+            <span className="ml-auto font-mono text-zinc-300">{catPct}%</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function DownloadButton({
+  icon: Icon,
+  label,
+  sublabel,
+  onClick,
+}: {
+  icon     : React.ElementType
+  label    : string
+  sublabel : string
+  onClick  : () => void
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className="cursor-pointer flex w-full items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2.5 text-left transition-colors hover:border-[#39FF14]/40 hover:bg-zinc-900"
+    >
+      <Icon className="h-4 w-4 shrink-0 text-[#39FF14]" />
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-medium text-zinc-200">{label}</p>
+        <p className="text-[11px] text-zinc-500">{sublabel}</p>
+      </div>
+      <Download className="h-3.5 w-3.5 shrink-0 text-zinc-500" />
+    </button>
+  )
+}
+
+function DownloadsSection({
+  sessionId,
+  status,
+}: {
+  sessionId: string
+  status   : ArtifactStatus
+}) {
+  if (!status.notebook && status.models.length === 0) {
+    return (
+      <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed border-zinc-800 p-6 text-center">
+        <div className="flex gap-3 text-[#39FF14]/30">
+          <NotebookText className="h-5 w-5" />
+          <Brain className="h-5 w-5" />
+        </div>
+        <p className="text-xs text-zinc-500">
+          Your notebook and model will appear here once generated
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-2">
+      {status.notebook && (
+        <DownloadButton
+          icon={NotebookText}
+          label="Training Notebook"
+          sublabel="training_notebook.ipynb"
+          onClick={() => downloadNotebook(sessionId)}
+        />
+      )}
+      {status.models.map(filename => (
+        <DownloadButton
+          key={filename}
+          icon={Brain}
+          label={filename.replace('.keras', '').replace(/_/g, ' ')}
+          sublabel={filename}
+          onClick={() => downloadModelFile(sessionId, filename)}
+        />
+      ))}
+    </div>
+  )
+}
+
+interface CompileState {
+  phase   : 'idle' | 'running' | 'error'
+  progress: number
+  step    : string
+  error   : string | null
+}
+
+function CompileSection({
+  sessionId,
+  status,
+}: {
+  sessionId: string
+  status   : ArtifactStatus
+}) {
+  const [compile, setCompile] = useState<CompileState>({
+    phase: 'idle', progress: 0, step: '', error: null,
+  })
+  const esRef = useRef<EventSource | null>(null)
+
+  // Clean up SSE on unmount
+  useEffect(() => () => { esRef.current?.close() }, [])
+
+  // Reset to idle when model becomes ready (another tab triggered compile, etc.)
+  useEffect(() => {
+    if (status.models.length > 0 && compile.phase === 'running') {
+      esRef.current?.close()
+      setCompile({ phase: 'idle', progress: 100, step: 'Done', error: null })
+    }
+  }, [status.models, compile.phase])
+
+  if (!status.notebook || status.models.length > 0) return null
+
+  const startCompile = async () => {
+    setCompile({ phase: 'running', progress: 0, step: 'Queuing…', error: null })
+
+    const result = await triggerCompile(sessionId)
+    if (!result) {
+      setCompile({ phase: 'error', progress: 0, step: '', error: 'Failed to start compilation' })
+      return
+    }
+
+    const es = new EventSource(`/api/platform/progress/${result.task_id}`)
+    esRef.current = es
+
+    es.onmessage = (e) => {
+      const data = JSON.parse(e.data) as {
+        state: string; progress: number; step: string; error?: string
+      }
+      if (data.state === 'SUCCESS') {
+        es.close()
+        setCompile({ phase: 'idle', progress: 100, step: 'Done', error: null })
+      } else if (data.state === 'FAILURE') {
+        es.close()
+        setCompile({ phase: 'error', progress: 0, step: '', error: data.error ?? 'Compilation failed' })
+      } else {
+        setCompile(prev => ({
+          ...prev,
+          progress: data.progress ?? prev.progress,
+          step    : data.step    ?? prev.step,
+        }))
+      }
+    }
+
+    es.onerror = () => {
+      es.close()
+      setCompile({ phase: 'error', progress: 0, step: '', error: 'Lost connection to server' })
+    }
+  }
+
+  return (
+    <>
+      <Separator className="bg-zinc-800" />
+
+      <div>
+        <p className="mb-3 text-xs font-medium uppercase tracking-wider text-zinc-500">
+          Compile &amp; Train
+        </p>
+
+        {compile.phase === 'idle' && (
+          <button
+            onClick={startCompile}
+            className="cursor-pointer flex w-full items-center justify-center gap-2 rounded-lg border border-[#39FF14]/30 bg-[#39FF14]/5 px-4 py-3 text-sm font-medium text-[#39FF14] transition-colors hover:bg-[#39FF14]/10 hover:border-[#39FF14]/60"
+          >
+            <Play className="h-4 w-4 fill-[#39FF14]" />
+            Compile &amp; Train Model
+          </button>
+        )}
+
+        {compile.phase === 'running' && (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-zinc-400">{compile.step || 'Running…'}</span>
+              <span className="font-mono text-[#39FF14]">{compile.progress}%</span>
+            </div>
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-800">
+              <div
+                className="h-full rounded-full bg-[#39FF14] transition-all duration-500"
+                style={{ width: `${compile.progress}%` }}
+              />
+            </div>
+            <p className="text-[10px] text-zinc-600">
+              This may take several minutes depending on dataset size
+            </p>
+          </div>
+        )}
+
+        {compile.phase === 'error' && (
+          <div className="space-y-2 rounded-lg border border-red-900/50 bg-red-950/30 p-3">
+            <div className="flex items-start gap-2">
+              <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
+              <p className="text-xs text-red-300">{compile.error}</p>
+            </div>
+            <button
+              onClick={() => setCompile({ phase: 'idle', progress: 0, step: '', error: null })}
+              className="cursor-pointer text-[10px] text-zinc-500 underline hover:text-zinc-300"
+            >
+              Dismiss and retry
+            </button>
+          </div>
+        )}
+      </div>
+    </>
+  )
+}
+
+function EnvironmentSelector() {
+  const { environment, setHardware } = useEnvironment()
+
+  const osLabel: Record<string, string> = {
+    windows: 'Windows / WSL2',
+    mac    : 'macOS',
+    linux  : 'Linux',
+    unknown: 'Unknown',
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2 text-xs font-medium text-zinc-400 uppercase tracking-wider">
+        <Monitor className="h-3.5 w-3.5 text-[#39FF14]" />
+        Your Environment
+      </div>
+
+      <div className="flex items-center justify-between text-sm">
+        <span className="text-zinc-500">OS</span>
+        <Badge variant="secondary" className="text-xs">
+          {osLabel[environment.os]}
+        </Badge>
+      </div>
+
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-1.5 text-sm text-zinc-500">
+          <Cpu className="h-3.5 w-3.5 text-[#39FF14]" />
+          Hardware
+        </div>
+        <Select
+          value={environment.hardware}
+          onValueChange={val => setHardware(val as HardwareTier)}
+        >
+          <SelectTrigger className="h-8 w-44 cursor-pointer bg-zinc-900 border-zinc-700 text-xs hover:border-[#39FF14]/50 focus:border-[#39FF14]/50 focus:ring-[#39FF14]/20 transition-colors">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent className="bg-zinc-900 border-zinc-700">
+            {ENVIRONMENT_OPTIONS.map(opt => (
+              <SelectItem key={opt.value} value={opt.value} className="cursor-pointer text-xs focus:bg-[#39FF14]/10 focus:text-[#39FF14]">
+                {opt.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      <p className="text-[11px] text-zinc-600">
+        Affects the{' '}
+        <code className="text-zinc-500">!pip install</code> cell in your notebook
+      </p>
+    </div>
+  )
+}
+
+interface ArtifactPanelProps {
+  sessionId: string | null
+}
+
+const POLL_INTERVAL = 4_000   // ms between status checks
+
+export function ArtifactPanel({ sessionId }: ArtifactPanelProps) {
+  const [analysis, setAnalysis]     = useState<DatasetAnalysis | null>(null)
+  const [status,   setStatus]       = useState<ArtifactStatus>({ notebook: false, models: [] })
+  const pollRef                     = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  useEffect(() => {
+    if (!sessionId) return
+
+    const loadAnalysis = async () => {
+      const result = await getDatasetAnalysis(sessionId)
+      if (result) setAnalysis(result)
+    }
+
+    loadAnalysis()
+    const handler = () => loadAnalysis()
+    window.addEventListener('dataset-uploaded', handler)
+    return () => window.removeEventListener('dataset-uploaded', handler)
+  }, [sessionId])
+
+  useEffect(() => {
+    if (!sessionId) return
+
+    const checkStatus = async () => {
+      const s = await getArtifactStatus(sessionId)
+      if (s) setStatus(s)
+    }
+
+    checkStatus()
+    pollRef.current = setInterval(checkStatus, POLL_INTERVAL)
+    return () => { if (pollRef.current) clearInterval(pollRef.current) }
+  }, [sessionId])
+
+  return (
+    <div className="flex h-full flex-col gap-5 overflow-y-auto bg-zinc-950 p-5">
+
+      {/* Dataset analysis */}
+      {analysis && (
+        <>
+          <div>
+            <p className="mb-3 text-xs font-medium uppercase tracking-wider text-zinc-500">
+              Dataset
+            </p>
+            <DatasetSummaryCard analysis={analysis} />
+          </div>
+          <Separator className="bg-zinc-800" />
+        </>
+      )}
+
+      {/* Downloads */}
+      <div>
+        <p className="mb-3 text-xs font-medium uppercase tracking-wider text-zinc-500">
+          Downloads
+        </p>
+        {sessionId
+          ? <DownloadsSection sessionId={sessionId} status={status} />
+          : (
+            <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed border-zinc-800 p-6 text-center">
+              <div className="flex gap-3 text-[#39FF14]/30">
+                <NotebookText className="h-5 w-5" />
+                <Brain className="h-5 w-5" />
+              </div>
+              <p className="text-xs text-zinc-500">
+                Your notebook and model will appear here once generated
+              </p>
+            </div>
+          )
+        }
+      </div>
+
+      {/* Compile & Train — shown after notebook is ready, before model exists */}
+      {sessionId && (
+        <CompileSection sessionId={sessionId} status={status} />
+      )}
+
+      <Separator className="bg-zinc-800" />
+
+      {/* Setup */}
+      <div>
+        <p className="mb-3 text-xs font-medium uppercase tracking-wider text-zinc-500">
+          Setup
+        </p>
+        <EnvironmentSelector />
+      </div>
+
+    </div>
+  )
+}

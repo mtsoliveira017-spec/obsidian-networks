@@ -1,0 +1,463 @@
+"""
+Platform router — anonymous session, dataset upload/preview,
+SSE job progress, and file downloads.
+"""
+import asyncio
+import io
+import json
+import os
+import re
+import time
+import uuid
+from pathlib import Path
+
+import pandas as pd
+from fastapi import APIRouter, Cookie, File, HTTPException, Request, UploadFile, status
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+
+from sessions import (
+    SessionData,
+    create_session,
+    get_session,
+    session_expires_at,
+)
+from tasks import celery_app, run_compilation_task
+
+try:
+    import magic as _magic
+    _HAS_MAGIC = True
+except ImportError:
+    _HAS_MAGIC = False
+
+SESSIONS_DIR    = Path(os.environ.get("SESSIONS_DIR", "/sessions"))
+MAX_FILE_BYTES  = int(os.environ.get("MAX_FILE_SIZE_MB", "500")) * 1024 * 1024
+SESSION_TTL     = int(os.environ.get("SESSION_TTL_HOURS", "4")) * 3600
+
+ALLOWED_EXTENSIONS = {".csv", ".json"}
+ALLOWED_MIME_TYPES = {"text/csv", "application/json", "text/plain", "application/octet-stream"}
+
+router = APIRouter(prefix="/platform")
+
+
+@router.get("/health")
+async def platform_health():
+    return {"status": "ok"}
+
+
+@router.post("/session")
+async def new_session(response: JSONResponse.__class__ = None):
+    """Create a new anonymous session. Returns session info and sets a cookie."""
+    from fastapi.responses import JSONResponse as _JSONResponse
+    sid     = create_session()
+    session = get_session(sid)
+    payload = {
+        "session_id": sid,
+        "created_at": int(session.created_at),
+        "expires_at": session_expires_at(session),
+    }
+    resp = _JSONResponse(content=payload)
+    resp.set_cookie(
+        key      ="session_id",
+        value    =sid,
+        httponly =True,
+        samesite ="lax",
+        secure   =False,       # set to True in production behind HTTPS
+        max_age  =SESSION_TTL,
+    )
+    return resp
+
+
+@router.get("/session")
+async def check_session(session_id: str = Cookie(default=None)):
+    """Return current session info or 401 if no valid session."""
+    if not session_id:
+        raise HTTPException(status_code=401, detail="No session cookie")
+    session = get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=401, detail="Session expired or not found")
+    return {
+        "session_id": session_id,
+        "created_at": int(session.created_at),
+        "expires_at": session_expires_at(session),
+    }
+
+
+def analyse_dataset(df: pd.DataFrame) -> dict:
+    """Extract meta-features from a dataset DataFrame."""
+    n_rows, n_features = df.shape
+
+    # Detect datetime columns (native dtype + parseable string columns)
+    datetime_cols: list[str] = [
+        c for c in df.columns if pd.api.types.is_datetime64_any_dtype(df[c])
+    ]
+    for c in df.select_dtypes(include=["object", "str"]).columns:
+        try:
+            pd.to_datetime(df[c].dropna().head(100))
+            if c not in datetime_cols:
+                datetime_cols.append(c)
+        except Exception:
+            pass
+    datetime_detected = len(datetime_cols) > 0
+
+    # Categorical vs numeric split
+    cat_cols = list(df.select_dtypes(include=["object", "str", "category"]).columns)
+    fraction_categorical = len(cat_cols) / n_features if n_features > 0 else 0.0
+
+    # Missing value fraction (mean over all columns)
+    fraction_missing = float(df.isnull().mean().mean())
+
+    # Cardinality
+    max_cardinality = int(max((df[c].nunique() for c in cat_cols), default=0))
+
+    # Average string length — used to detect NLP-style text columns
+    avg_string_length = 0.0
+    if cat_cols:
+        lengths = [float(df[c].dropna().astype(str).str.len().mean()) for c in cat_cols]
+        avg_string_length = sum(lengths) / len(lengths)
+
+    # Target column: heuristic — last column is most common convention
+    target_col = str(df.columns[-1])
+    n_classes   = int(df[target_col].nunique())
+
+    # Class imbalance ratio (majority / minority count)
+    class_imbalance_ratio: float | None = None
+    if 2 <= n_classes <= 50:
+        counts = df[target_col].value_counts()
+        if counts.min() > 0:
+            class_imbalance_ratio = round(float(counts.max() / counts.min()), 2)
+
+    # Dataset type
+    col_names_lower = " ".join(df.columns.str.lower())
+    if avg_string_length > 50:
+        dataset_type = "nlp"
+    elif datetime_detected:
+        dataset_type = "time_series"
+    elif any(kw in col_names_lower for kw in ("image", " img ", "filepath", "filename", "path")):
+        dataset_type = "image"
+    else:
+        dataset_type = "tabular"
+
+    # Task type — OHLCV fingerprint takes priority (RL trading data)
+    ohlcv_keywords = {"open", "high", "low", "close", "volume", "price", "bid", "ask"}
+    col_set        = {c.lower() for c in df.columns}
+    is_ohlcv       = len(ohlcv_keywords & col_set) >= 3
+
+    if is_ohlcv and datetime_detected:
+        task_type = "rl_trading"
+    elif n_classes == 2:
+        task_type = "binary_classification"
+    elif n_classes > 2 and (n_classes <= 20 or not pd.api.types.is_numeric_dtype(df[target_col])):
+        task_type = "multiclass_classification"
+    else:
+        task_type = "regression"
+
+    return {
+        "dataset_type"          : dataset_type,
+        "task_type"             : task_type,
+        "n_rows"                : n_rows,
+        "n_features"            : n_features,
+        "target_col"            : target_col,
+        "n_classes"             : n_classes,
+        "class_imbalance_ratio" : class_imbalance_ratio,
+        "fraction_categorical"  : round(fraction_categorical, 3),
+        "fraction_missing"      : round(fraction_missing, 3),
+        "max_cardinality"       : max_cardinality,
+        "datetime_detected"     : datetime_detected,
+        "avg_string_length"     : round(avg_string_length, 1),
+        "columns"               : list(df.columns),
+        "dtypes"                : {col: str(dtype) for col, dtype in df.dtypes.items()},
+    }
+
+
+@router.post("/upload/{session_id}")
+async def upload_dataset(session_id: str, file: UploadFile = File(...)):
+    """Upload a CSV or JSON dataset. Validates type and size."""
+    session = get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found or expired")
+
+    # Extension check
+    ext = Path(file.filename or "").suffix.lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(status_code=400, detail=f"Only .csv and .json files are accepted (got '{ext}')")
+
+    # Stream to disk with size enforcement
+    dest_path = session.session_dir / f"dataset{ext}"
+    total_size = 0
+    chunks: list[bytes] = []
+
+    while True:
+        chunk = await file.read(1024 * 1024)  # 1 MB chunks
+        if not chunk:
+            break
+        total_size += len(chunk)
+        if total_size > MAX_FILE_BYTES:
+            raise HTTPException(status_code=413, detail=f"File too large (max {MAX_FILE_BYTES // (1024*1024)} MB)")
+        chunks.append(chunk)
+
+    raw_bytes = b"".join(chunks)
+
+    # MIME validation via python-magic (if available)
+    if _HAS_MAGIC:
+        mime = _magic.from_buffer(raw_bytes[:2048], mime=True)
+        if mime not in ALLOWED_MIME_TYPES:
+            raise HTTPException(status_code=400, detail=f"Invalid file content type: {mime}")
+
+    # Content validation — try to parse
+    try:
+        if ext == ".csv":
+            df = pd.read_csv(io.BytesIO(raw_bytes))
+        else:
+            df = pd.read_json(io.BytesIO(raw_bytes))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not parse file: {e}")
+
+    if df.empty:
+        raise HTTPException(status_code=400, detail="Dataset is empty")
+    if len(df.columns) < 2:
+        raise HTTPException(status_code=400, detail="Dataset must have at least 2 columns")
+
+    # Save to disk
+    dest_path.write_bytes(raw_bytes)
+    session.dataset_path = str(dest_path)
+
+    # Run meta-feature extraction and cache the result
+    analysis = analyse_dataset(df)
+    session.analysis = analysis
+    (session.session_dir / "analysis.json").write_text(json.dumps(analysis))
+
+    return {
+        "session_id" : session_id,
+        "filename"   : file.filename,
+        "size_bytes" : total_size,
+        "rows"       : len(df),
+        "columns"    : len(df.columns),
+        "analysis"   : analysis,
+    }
+
+
+@router.get("/preview/{session_id}")
+async def preview_dataset(session_id: str):
+    """Return schema + first 5 rows of the uploaded dataset."""
+    session = get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found or expired")
+    if not session.dataset_path:
+        raise HTTPException(status_code=404, detail="No dataset uploaded for this session")
+
+    path = Path(session.dataset_path)
+    try:
+        df = pd.read_csv(path) if path.suffix == ".csv" else pd.read_json(path)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Could not read dataset: {e}")
+
+    return {
+        "columns"    : list(df.columns),
+        "dtypes"     : {col: str(dtype) for col, dtype in df.dtypes.items()},
+        "sample_rows": df.head(5).where(pd.notna(df.head(5)), other=None).to_dict(orient="records"),
+        "row_count"  : len(df),
+    }
+
+
+@router.get("/analysis/{session_id}")
+async def get_analysis(session_id: str):
+    """Return cached meta-feature analysis for the uploaded dataset."""
+    session = get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found or expired")
+    if not session.analysis:
+        raise HTTPException(status_code=404, detail="No analysis available — upload a dataset first")
+    return session.analysis
+
+
+_PIP_INSTALL: dict[str, str] = {
+    "cpu"          : "!pip install tensorflow keras pandas scikit-learn matplotlib seaborn",
+    "nvidia_gpu"   : "!pip install 'tensorflow[and-cuda]' keras pandas scikit-learn matplotlib seaborn",
+    "apple_silicon": "!pip install tensorflow-metal tensorflow-macos keras pandas scikit-learn matplotlib seaborn",
+    "google_colab" : "# TensorFlow is pre-installed on Colab\n!pip install keras pandas scikit-learn matplotlib seaborn",
+}
+
+_SECTION_RE = re.compile(r"^# ── .+ ──+\s*$", re.MULTILINE)
+
+
+def _code_cell(source: str) -> dict:
+    lines = [l + "\n" for l in source.rstrip().split("\n")]
+    return {
+        "cell_type"     : "code",
+        "id"            : uuid.uuid4().hex[:8],
+        "metadata"      : {},
+        "outputs"       : [],
+        "execution_count": None,
+        "source"        : lines,
+    }
+
+
+def _md_cell(source: str) -> dict:
+    return {
+        "cell_type": "markdown",
+        "id"       : uuid.uuid4().hex[:8],
+        "metadata" : {},
+        "source"   : [source],
+    }
+
+
+def build_notebook(script: str, description: str, hardware: str = "cpu") -> dict:
+    """Wrap a Python training script in a .ipynb structure."""
+    pip_line = _PIP_INSTALL.get(hardware, _PIP_INSTALL["cpu"])
+
+    cells: list[dict] = [
+        _md_cell(f"# {description}\n\n*Generated by [Obsidian Networks](https://github.com)*"),
+        _code_cell(pip_line),
+    ]
+
+    # Split on our section-header style comments (# ── Name ──)
+    headers   = _SECTION_RE.findall(script)
+    parts     = _SECTION_RE.split(script)
+
+    if headers:
+        if parts[0].strip():
+            cells.append(_code_cell(parts[0]))
+        for header, content in zip(headers, parts[1:]):
+            if content.strip():
+                label = header.strip().lstrip("# ─").rstrip(" ─").strip()
+                cells.append(_md_cell(f"## {label}"))
+                cells.append(_code_cell(content))
+    else:
+        cells.append(_code_cell(script))
+
+    return {
+        "nbformat"      : 4,
+        "nbformat_minor": 5,
+        "metadata": {
+            "kernelspec"   : {"display_name": "Python 3", "language": "python", "name": "python3"},
+            "language_info": {"name": "python", "version": "3.11.0"},
+        },
+        "cells": cells,
+    }
+
+
+@router.post("/notebook/{session_id}")
+async def create_notebook(session_id: str, payload: dict):
+    """Convert a generated Python script to a .ipynb and save it."""
+    session = get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found or expired")
+
+    script      = payload.get("script", "")
+    description = payload.get("description", "Training Notebook")
+    hardware    = (session.environment or {}).get("hardware", "cpu") if session.environment else "cpu"
+
+    if not script.strip():
+        raise HTTPException(status_code=400, detail="Script cannot be empty")
+
+    nb   = build_notebook(script, description, hardware)
+    path = session.session_dir / "output" / "training_notebook.ipynb"
+    path.write_text(json.dumps(nb, indent=2))
+
+    (session.session_dir / "generated_script.py").write_text(script)
+
+    for stale in (session.session_dir / "output").glob("*.keras"):
+        stale.unlink()
+
+    return {"ok": True, "path": str(path)}
+
+
+@router.get("/status/{session_id}")
+async def artifact_status(session_id: str):
+    """Return which downloadable artifacts are ready for this session."""
+    session = get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found or expired")
+
+    output_dir = session.session_dir / "output"
+    return {
+        "notebook": (output_dir / "training_notebook.ipynb").exists(),
+        "models"  : sorted(f.name for f in output_dir.glob("*.keras")),
+    }
+
+
+@router.get("/progress/{task_id}")
+async def stream_progress(task_id: str):
+    """Server-Sent Events stream for Celery task progress."""
+    from celery.result import AsyncResult
+
+    async def event_generator():
+        while True:
+            result = AsyncResult(task_id, app=celery_app)
+            info   = result.info if isinstance(result.info, dict) else {}
+            data   = {
+                "state"   : result.state,
+                "progress": info.get("progress", 0),
+                "step"    : info.get("step", ""),
+                "error"   : info.get("error"),
+            }
+            yield f"data: {json.dumps(data)}\n\n"
+            if result.state in ("SUCCESS", "FAILURE"):
+                break
+            await asyncio.sleep(1)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control"   : "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection"      : "keep-alive",
+        },
+    )
+
+
+@router.get("/download/{session_id}/model/{filename}")
+async def download_model(session_id: str, filename: str):
+    """Download a compiled .keras model file by name (e.g. actor.keras, critic.keras)."""
+    if not filename.endswith(".keras") or "/" in filename or ".." in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename — must be a .keras file")
+
+    session = get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found or expired")
+
+    model_path = session.session_dir / "output" / filename
+    if not model_path.exists():
+        raise HTTPException(status_code=404, detail=f"{filename} not yet compiled for this session")
+
+    return FileResponse(
+        path      =str(model_path),
+        filename  =filename,
+        media_type="application/octet-stream",
+    )
+
+
+@router.get("/download/{session_id}/notebook")
+async def download_notebook(session_id: str):
+    """Download the generated training_notebook.ipynb file."""
+    session = get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found or expired")
+
+    notebook_path = session.session_dir / "output" / "training_notebook.ipynb"
+    if not notebook_path.exists():
+        raise HTTPException(status_code=404, detail="Notebook not yet generated for this session")
+
+    return FileResponse(
+        path    =str(notebook_path),
+        filename="training_notebook.ipynb",
+        media_type="application/octet-stream",
+    )
+
+
+@router.post("/compile/{session_id}")
+async def trigger_compilation(session_id: str):
+    """Enqueue a model compilation job for this session."""
+    session = get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found or expired")
+
+    script_path = session.session_dir / "generated_script.py"
+    if not script_path.exists():
+        raise HTTPException(status_code=400, detail="No generated script found — run the AI pipeline first")
+
+    task = run_compilation_task.delay(session_id)
+    session.task_id = task.id
+
+    return {"task_id": task.id, "status": "queued"}

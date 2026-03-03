@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 36" width="200" height="36" role="img" aria-label="Obsidian Networks">
+  <defs>
+    <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="1.5" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- ── Neural net icon (36×36 area, 3→4→2 layers) ── -->
+
+  <!-- Connections: input → hidden (dim) -->
+  <g stroke="#39FF14" stroke-width="0.7" stroke-opacity="0.28">
+    <line x1="5"  y1="7"  x2="18" y2="4"/>
+    <line x1="5"  y1="7"  x2="18" y2="13"/>
+    <line x1="5"  y1="7"  x2="18" y2="23"/>
+    <line x1="5"  y1="7"  x2="18" y2="32"/>
+    <line x1="5"  y1="18" x2="18" y2="4"/>
+    <line x1="5"  y1="18" x2="18" y2="13"/>
+    <line x1="5"  y1="18" x2="18" y2="23"/>
+    <line x1="5"  y1="18" x2="18" y2="32"/>
+    <line x1="5"  y1="29" x2="18" y2="4"/>
+    <line x1="5"  y1="29" x2="18" y2="13"/>
+    <line x1="5"  y1="29" x2="18" y2="23"/>
+    <line x1="5"  y1="29" x2="18" y2="32"/>
+  </g>
+
+  <!-- Connections: hidden → output (brighter) -->
+  <g stroke="#39FF14" stroke-width="0.7" stroke-opacity="0.50">
+    <line x1="18" y1="4"  x2="32" y2="12"/>
+    <line x1="18" y1="4"  x2="32" y2="25"/>
+    <line x1="18" y1="13" x2="32" y2="12"/>
+    <line x1="18" y1="13" x2="32" y2="25"/>
+    <line x1="18" y1="23" x2="32" y2="12"/>
+    <line x1="18" y1="23" x2="32" y2="25"/>
+    <line x1="18" y1="32" x2="32" y2="12"/>
+    <line x1="18" y1="32" x2="32" y2="25"/>
+  </g>
+
+  <!-- Input nodes (x=5) -->
+  <g filter="url(#glow)">
+    <circle cx="5"  cy="7"  r="2.8" fill="#000" stroke="#39FF14" stroke-width="1.2"/>
+    <circle cx="5"  cy="18" r="2.8" fill="#000" stroke="#39FF14" stroke-width="1.2"/>
+    <circle cx="5"  cy="29" r="2.8" fill="#000" stroke="#39FF14" stroke-width="1.2"/>
+  </g>
+
+  <!-- Hidden nodes (x=18) -->
+  <g filter="url(#glow)">
+    <circle cx="18" cy="4"  r="3.2" fill="#000"    stroke="#39FF14" stroke-width="1.2"/>
+    <circle cx="18" cy="13" r="3.2" fill="#39FF14" stroke="#39FF14" stroke-width="1.2" fill-opacity="0.3"/>
+    <circle cx="18" cy="23" r="3.2" fill="#39FF14" stroke="#39FF14" stroke-width="1.2" fill-opacity="0.3"/>
+    <circle cx="18" cy="32" r="3.2" fill="#000"    stroke="#39FF14" stroke-width="1.2"/>
+  </g>
+
+  <!-- Output nodes (x=32) — brightest -->
+  <g filter="url(#glow)">
+    <circle cx="32" cy="12" r="3.8" fill="#39FF14" stroke="#39FF14" stroke-width="1.2" fill-opacity="0.85"/>
+    <circle cx="32" cy="25" r="3.8" fill="#39FF14" stroke="#39FF14" stroke-width="1.2" fill-opacity="0.85"/>
+  </g>
+
+  <!-- Vertical divider -->
+  <line x1="43" y1="4" x2="43" y2="32" stroke="#39FF14" stroke-width="0.5" stroke-opacity="0.30"/>
+
+  <!-- ── Text ── -->
+  <text
+    x="50" y="17"
+    font-family="'Geist', 'Inter', 'SF Pro Display', system-ui, sans-serif"
+    font-size="15"
+    font-weight="800"
+    fill="#F8FAFC"
+    letter-spacing="-0.3"
+  >obsidian</text>
+
+  <text
+    x="51" y="30"
+    font-family="'Geist', 'Inter', 'SF Pro Display', system-ui, sans-serif"
+    font-size="10"
+    font-weight="500"
+    fill="#39FF14"
+    letter-spacing="1.2"
+    fill-opacity="0.90"
+  >networks</text>
+</svg>
