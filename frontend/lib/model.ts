@@ -51,7 +51,7 @@ export function getModel() {
 
     case 'anthropic':
     default: {
-      return anthropic(modelId, { cacheControl: { type: 'ephemeral' } })
+      return anthropic(modelId)
     }
   }
 }

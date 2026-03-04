@@ -353,10 +353,12 @@ export async function POST(req: Request) {
     messages       : modelMessages,
     tools          : { ...researchTools, create_notebook: createNotebookTool(sessionId) },
     stopWhen       : stepCountIs(10),
-    // Anthropic: auto-clear old tool uses server-side when context grows large.
-    // Keeps the last 3 tool-use turns; strips tool inputs (large doc fetches).
+    // Anthropic: cache the system prompt + auto-clear old tool uses when context grows large.
+    // cacheControl marks the system prompt for ephemeral caching (reduces cost + TPM usage).
+    // contextManagement clears old tool-use results at 60k tokens, keeping last 3 tool turns.
     providerOptions: provider === 'anthropic' ? {
       anthropic: {
+        cacheControl: { type: 'ephemeral' },
         contextManagement: {
           edits: [
             {
