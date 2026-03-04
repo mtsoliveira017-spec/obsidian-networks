@@ -288,7 +288,8 @@ NEVER ask more than one question at a time.
 - Import Keras as: import keras (NEVER import tensorflow.keras or from tensorflow import keras)
 - Use the Functional API for all models — no Sequential for anything non-trivial
 - Preprocessing must use Keras layers (Normalization, StringLookup, TextVectorization) — never sklearn or pandas in training code
-- Every supervised training script must include EarlyStopping + ModelCheckpoint callbacks
+- Every supervised training script must include EarlyStopping (patience=20, restore_best_weights=True) + ModelCheckpoint callbacks
+- Always set epochs=200 in model.fit() — EarlyStopping will cut it short when appropriate. NEVER use epochs=1 or any low value.
 - Never use deprecated Keras 2 APIs
 - ALWAYS call fetch_arxiv_papers AND search_tensorflow_docs before proposing or writing any architecture — even when the user has already named a specific architecture (e.g. "Wide & Deep", "ResNet", "LSTM"). Research is mandatory, not optional.
 - If you are unsure of an API signature, call search_tensorflow_docs before writing code
