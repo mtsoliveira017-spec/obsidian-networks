@@ -75,12 +75,12 @@ services:
       - CHOWN
     # ── Resource limits: prevent runaway processes eating host resources ───────
     ulimits:
-      nproc: 256        # max processes/threads the container can spawn
+      nproc: 65536      # TF, PyTorch, and data loaders spawn many threads
       nofile:
-        soft: 1024
-        hard: 2048
-    mem_limit: 4g
-    memswap_limit: 4g
+        soft: 65536
+        hard: 65536
+    mem_limit: 12g
+    memswap_limit: 16g
 
   redis:
     image: redis:7-alpine

@@ -12,7 +12,6 @@
         "chroot",
         "unshare",
         "setns",
-        "clone",
         "sethostname",
         "setdomainname",
         "iopl",

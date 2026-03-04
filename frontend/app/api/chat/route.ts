@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { getModel, getProvider } from '@/lib/model'
 
 export const runtime = 'nodejs'
-export const maxDuration = 60
+export const maxDuration = 120
 
 // Anthropic: ~200k tokens; OpenAI: ~128k; LM Studio: varies (often 8–32k)
 const MAX_HISTORY_MSGS: Record<string, number> = {
@@ -345,8 +345,7 @@ export async function POST(req: Request) {
     system         : SYSTEM,
     messages       : modelMessages,
     tools          : { ...researchTools, create_notebook: createNotebookTool(sessionId) },
-    stopWhen       : stepCountIs(10),
-    maxOutputTokens: 4096,
+    stopWhen: stepCountIs(10),
   })
 
   return result.toUIMessageStreamResponse()

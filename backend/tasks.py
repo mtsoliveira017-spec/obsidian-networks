@@ -122,12 +122,12 @@ def run_compilation_task(self, session_id: str) -> dict:
         """Set per-process resource limits (Linux only)."""
         if sys.platform == "linux":
             import resource
-            # Max CPU time: 360s (hard kill after 6 min — soft timeout is 5 min)
-            resource.setrlimit(resource.RLIMIT_CPU, (360, 400))
-            # Max output file size: 2 GB (prevents disk-fill attacks)
-            resource.setrlimit(resource.RLIMIT_FSIZE, (2 * 1024 ** 3, 2 * 1024 ** 3))
-            # Max address space: 6 GB (TF needs headroom but cap runaway allocations)
-            resource.setrlimit(resource.RLIMIT_AS, (6 * 1024 ** 3, 6 * 1024 ** 3))
+            # Max CPU time: 600s soft / 660s hard (10 min training budget)
+            resource.setrlimit(resource.RLIMIT_CPU, (600, 660))
+            # Max output file size: 10 GB (large model checkpoints + datasets)
+            resource.setrlimit(resource.RLIMIT_FSIZE, (10 * 1024 ** 3, 10 * 1024 ** 3))
+            # Max address space: 12 GB (matches container mem_limit for complex models)
+            resource.setrlimit(resource.RLIMIT_AS, (12 * 1024 ** 3, 12 * 1024 ** 3))
 
     try:
         proc = subprocess.Popen(
@@ -195,10 +195,10 @@ def run_compilation_task(self, session_id: str) -> dict:
         pass
 
     try:
-        proc.wait(timeout=300)
+        proc.wait(timeout=600)
     except subprocess.TimeoutExpired:
         proc.kill()
-        raise RuntimeError("Compilation timed out (5 minute limit)")
+        raise RuntimeError("Compilation timed out (10 minute limit)")
 
     if proc.returncode != 0:
         error_msg = "\n".join(stdout_lines)[-2000:] or "Unknown error"

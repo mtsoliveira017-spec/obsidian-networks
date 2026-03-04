@@ -25,7 +25,7 @@ import {
   NotebookText, Brain, Monitor, Cpu,
   Table2, Clock, Type, ImageIcon,
   AlertTriangle, CheckCircle2,
-  Download, Play, XCircle, Loader2, Zap,
+  Download, Play, XCircle, Loader2, Zap, Info,
 } from 'lucide-react'
 import { TrainingChart, type EpochMetrics } from './training-chart'
 import { PlotGallery } from './plot-gallery'
@@ -624,6 +624,42 @@ export function ArtifactPanel({ sessionId }: ArtifactPanelProps) {
           Setup
         </p>
         <EnvironmentSelector />
+      </div>
+
+      <Separator className="bg-zinc-800" />
+
+      {/* Platform limits */}
+      <div>
+        <div className="mb-3 flex items-center gap-2">
+          <Info className="h-3.5 w-3.5 text-zinc-600" />
+          <p className="text-xs font-medium uppercase tracking-wider text-zinc-500">Platform Limits</p>
+        </div>
+        <div className="space-y-1.5 text-[11px] text-zinc-500">
+          <div className="flex justify-between">
+            <span>Max training time</span>
+            <span className="font-mono text-zinc-400">10 min</span>
+          </div>
+          <div className="flex justify-between">
+            <span>Max dataset size</span>
+            <span className="font-mono text-zinc-400">500 MB</span>
+          </div>
+          <div className="flex justify-between">
+            <span>Max memory</span>
+            <span className="font-mono text-zinc-400">12 GB</span>
+          </div>
+          <div className="flex justify-between">
+            <span>Max output files</span>
+            <span className="font-mono text-zinc-400">10 GB</span>
+          </div>
+          <div className="flex justify-between">
+            <span>Session TTL</span>
+            <span className="font-mono text-zinc-400">4 hrs</span>
+          </div>
+          <div className="flex justify-between">
+            <span>Max epochs</span>
+            <span className="font-mono text-zinc-400">200</span>
+          </div>
+        </div>
       </div>
 
     </div>
