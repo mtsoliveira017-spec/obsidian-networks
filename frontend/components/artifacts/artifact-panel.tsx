@@ -224,14 +224,16 @@ interface CompileState {
 
 // ── Stage definitions ──────────────────────────────────────────────────────
 const STAGES = [
-  { key: 'queue',    label: 'Queued',             maxProgress: 5  },
-  { key: 'loading',  label: 'Loading TensorFlow', maxProgress: 15 },
-  { key: 'building', label: 'Building model',     maxProgress: 18 },
-  { key: 'training', label: 'Training',           maxProgress: 100 },
+  { key: 'queue',   label: 'Queued',    maxProgress: 5   },
+  { key: 'loading', label: 'Loading',   maxProgress: 15  },
+  { key: 'build',   label: 'Building',  maxProgress: 18  },
+  { key: 'train',   label: 'Training',  maxProgress: 91  },
+  { key: 'saving',  label: 'Saving',    maxProgress: 100 },
 ]
 
 function stepToStage(step: string, progress: number): number {
-  if (step.startsWith('Epoch') || progress > 18) return 3
+  if (step.includes('Saving'))                    return 4
+  if (step.startsWith('Epoch') || progress > 18)  return 3
   if (step.includes('Building'))                  return 2
   if (step.includes('Loading'))                   return 1
   return 0
@@ -248,18 +250,44 @@ function CompileRunningState({
 
   // Elapsed timer
   const [elapsed, setElapsed] = useState(0)
-  const startRef = useRef(Date.now())
+  const startRef       = useRef(Date.now())
+  const trainStartRef  = useRef<number | null>(null)
   useEffect(() => {
     startRef.current = Date.now()
     setElapsed(0)
     const id = setInterval(() => setElapsed(Math.floor((Date.now() - startRef.current) / 1000)), 1000)
     return () => clearInterval(id)
   }, [])
+
+  // Track when training stage began (for epoch rate + ETA)
+  useEffect(() => {
+    if (stageIdx === 3 && trainStartRef.current === null) {
+      trainStartRef.current = Date.now()
+    }
+  }, [stageIdx])
+
   const elapsedStr = useMemo(() => {
     const m = Math.floor(elapsed / 60)
     const s = elapsed % 60
     return m > 0 ? `${m}m ${s}s` : `${s}s`
   }, [elapsed])
+
+  // Epoch rate + ETA — computed from metrics timestamps
+  const { epochRate, eta } = useMemo(() => {
+    const lastMetric  = metrics[metrics.length - 1]
+    if (!lastMetric || !trainStartRef.current || lastMetric.epoch < 2) return { epochRate: null, eta: null }
+    const trainElapsed = (Date.now() - trainStartRef.current) / 1000   // seconds
+    const rate         = lastMetric.epoch / trainElapsed                // epochs/sec
+    if (rate <= 0) return { epochRate: null, eta: null }
+    const remaining    = (lastMetric.total_epochs - lastMetric.epoch) / rate
+    const etaMin       = Math.floor(remaining / 60)
+    const etaSec       = Math.floor(remaining % 60)
+    const rateStr      = rate >= 1 / 60
+      ? `${(rate * 60).toFixed(1)} ep/min`
+      : `${(1 / rate / 60).toFixed(1)} min/ep`
+    const etaStr       = etaMin > 0 ? `~${etaMin}m ${etaSec}s left` : `~${etaSec}s left`
+    return { epochRate: rateStr, eta: etaStr }
+  }, [metrics, elapsed]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const isEarlyStage = stageIdx < 3
 
@@ -283,7 +311,15 @@ function CompileRunningState({
           </span>
         </div>
         <div className="flex items-center gap-2">
-          <span className="font-mono text-[10px] text-zinc-500">{elapsedStr}</span>
+          {epochRate && (
+            <span className="font-mono text-[10px] text-zinc-600">{epochRate}</span>
+          )}
+          {eta && (
+            <span className="font-mono text-[10px] text-zinc-500">{eta}</span>
+          )}
+          {!eta && (
+            <span className="font-mono text-[10px] text-zinc-500">{elapsedStr}</span>
+          )}
           <span className="font-mono text-xs font-medium text-[#39FF14]">{compile.progress}%</span>
         </div>
       </div>
@@ -320,7 +356,29 @@ function CompileRunningState({
         </div>
       </div>
 
-      {/* Silent stage placeholder — shows skeleton dots when waiting for TF */}
+      {/* Training progress row — visible during training and saving */}
+      {stageIdx >= 3 && metrics.length > 0 && (() => {
+        const last = metrics[metrics.length - 1]
+        return (
+          <div className="flex items-center justify-between text-[10px] text-zinc-500 border-t border-zinc-800/60 pt-2">
+            <span>
+              Epoch <span className="font-mono text-zinc-300">{last.epoch}</span>
+              <span className="text-zinc-700"> / {last.total_epochs}</span>
+            </span>
+            <span className="font-mono text-zinc-500">{elapsedStr} elapsed</span>
+          </div>
+        )
+      })()}
+
+      {/* Stage-specific status hint */}
+      {stageIdx === 4 && (
+        <div className="flex items-center gap-1.5">
+          <Loader2 className="h-3 w-3 text-zinc-600 animate-spin" />
+          <span className="text-[10px] text-zinc-600 animate-pulse">
+            Writing model files and plots…
+          </span>
+        </div>
+      )}
       {isEarlyStage && metrics.length === 0 && (
         <div className="flex items-center gap-1.5">
           <Loader2 className="h-3 w-3 text-zinc-600 animate-spin" />

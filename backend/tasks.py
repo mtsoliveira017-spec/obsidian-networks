@@ -205,6 +205,11 @@ def run_compilation_task(self, session_id: str) -> dict:
     except Exception:
         pass
 
+    self.update_state(state="PROGRESS", meta={
+        "step"    : "Saving outputs…",
+        "progress": 92,
+    })
+
     try:
         proc.wait(timeout=MAX_TRAINING_MINUTES * 60)
     except subprocess.TimeoutExpired:

@@ -59,13 +59,13 @@ function PlotThumbnail({
 
       {/* Full-size Dialog */}
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-3xl border-zinc-800 bg-zinc-950 p-4">
-          <DialogHeader className="pb-2">
+        <DialogContent className="max-w-[92vw] w-[92vw] h-[90vh] border-zinc-800 bg-zinc-950 p-4 flex flex-col">
+          <DialogHeader className="pb-2 shrink-0">
             <DialogTitle className="text-sm font-medium text-zinc-200 capitalize">
               {label}
             </DialogTitle>
           </DialogHeader>
-          <div className="relative w-full" style={{ aspectRatio: '16/9' }}>
+          <div className="relative flex-1 min-h-0">
             {error ? (
               <div className="flex h-full items-center justify-center">
                 <ImageIcon className="h-12 w-12 text-zinc-700" />
