@@ -385,16 +385,24 @@ async def stream_progress(task_id: str):
         while True:
             result = AsyncResult(task_id, app=celery_app)
             info   = result.info if isinstance(result.info, dict) else {}
+
+            # On FAILURE, result.info is the exception instance — extract its message
+            error = info.get("error")
+            if result.state == "FAILURE" and not error:
+                exc = result.info
+                error = str(exc) if exc is not None else "Compilation failed"
+
             data   = {
                 "state"   : result.state,
                 "progress": info.get("progress", 0),
                 "step"    : info.get("step", ""),
-                "error"   : info.get("error"),
+                "error"   : error,
+                "metrics" : info.get("metrics"),
             }
             yield f"data: {json.dumps(data)}\n\n"
             if result.state in ("SUCCESS", "FAILURE"):
                 break
-            await asyncio.sleep(1)
+            await asyncio.sleep(0.5)
 
     return StreamingResponse(
         event_generator(),

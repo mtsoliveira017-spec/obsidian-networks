@@ -51,6 +51,7 @@ Describe your problem, upload your data, and receive production-ready TensorFlow
 - [Tech Stack](#tech-stack)
 - [Project Structure](#project-structure)
 - [Security Model](#security-model)
+- [Recent Updates](#recent-updates)
 - [Roadmap](#roadmap)
 - [Contributing](#contributing)
 - [License](#license)
@@ -332,11 +333,21 @@ Scripts run in a subprocess with a stripped environment — only `PATH`, `HOME`,
 
 ---
 
+## Recent Updates
+
+### v0.2.0 — Training Metrics Visualisation
+- Live loss/accuracy chart appears inline during compilation, streamed epoch-by-epoch via SSE
+- Click the expand icon to open a full-size chart with tooltip, legend, and stat pills
+- Dual-axis layout: loss on the left, accuracy percentage on the right
+- Built with Recharts + shadcn-style `ChartContainer` component
+
+---
+
 ## Roadmap
 
 - [ ] Image dataset support (upload folder of images, auto-generate CNN/ViT architectures)
 - [ ] Time series forecasting templates (LSTM, Temporal Fusion Transformer)
-- [ ] Training metrics visualisation (live loss/accuracy charts during compilation)
+- [x] Training metrics visualisation (live loss/accuracy charts during compilation)
 - [ ] Model comparison — compile multiple architectures and compare results side-by-side
 - [ ] Docker-isolated compilation sandbox (seccomp profile, read-only filesystem)
 - [ ] Export to ONNX / TensorFlow Lite for edge deployment

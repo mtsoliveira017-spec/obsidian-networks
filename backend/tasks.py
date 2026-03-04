@@ -1,5 +1,6 @@
 import ast
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -14,9 +15,14 @@ SESSIONS_DIR = Path(os.environ.get("SESSIONS_DIR", "/sessions"))
 ALLOWED_IMPORTS = {
     "tensorflow", "keras", "numpy", "pandas",
     "sklearn", "scipy", "gymnasium", "gym",
+    "matplotlib", "seaborn", "plotly",
     "os", "pathlib", "json", "math", "collections", "typing", "functools",
 }
-BLOCKED_ATTRS = {"system", "popen", "execve", "exec", "eval", "compile"}
+# Blocked as standalone function calls only (e.g. eval("..."), exec("..."))
+# NOT as method calls — model.compile() is legitimate Keras API
+BLOCKED_BUILTINS = {"exec", "eval"}
+# Blocked as both standalone and attribute calls
+BLOCKED_ATTRS    = {"system", "popen", "execve"}
 
 celery_app = Celery("obsidian_worker", broker=REDIS_URL, backend=REDIS_URL)
 celery_app.conf.update(
@@ -28,17 +34,65 @@ celery_app.conf.update(
 
 
 def validate_code(code: str) -> None:
-    """AST-level validation: allowlist imports, block dangerous attributes."""
+    """AST-level validation: allowlist imports, block dangerous builtins."""
     tree = ast.parse(code)
     for node in ast.walk(tree):
-        if isinstance(node, (ast.Import, ast.ImportFrom)):
-            names = [alias.name.split(".")[0] for alias in node.names]
-            for name in names:
-                if name not in ALLOWED_IMPORTS:
-                    raise ValueError(f"Import '{name}' is not allowed in generated code")
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-            if node.func.attr in BLOCKED_ATTRS:
+        if isinstance(node, ast.Import):
+            # e.g. import tensorflow, import numpy as np
+            for alias in node.names:
+                top = alias.name.split(".")[0]
+                if top not in ALLOWED_IMPORTS:
+                    raise ValueError(f"Import '{alias.name}' is not allowed in generated code")
+        elif isinstance(node, ast.ImportFrom):
+            # e.g. from keras import layers  →  module='keras'
+            # e.g. from keras.layers import Dense  →  module='keras.layers'
+            module_top = (node.module or "").split(".")[0]
+            if module_top and module_top not in ALLOWED_IMPORTS:
+                raise ValueError(f"Import from '{node.module}' is not allowed in generated code")
+        elif isinstance(node, ast.Call):
+            # Block dangerous standalone function calls: eval("..."), exec("...")
+            if isinstance(node.func, ast.Name) and node.func.id in BLOCKED_BUILTINS:
+                raise ValueError(f"Call to built-in '{node.func.id}' is not permitted")
+            # Block dangerous OS-level method calls: os.system(), os.popen(), os.execve()
+            if isinstance(node.func, ast.Attribute) and node.func.attr in BLOCKED_ATTRS:
                 raise ValueError(f"Call to '{node.func.attr}' is not permitted")
+
+
+# Matches Keras verbose=1 epoch lines like:
+#   Epoch 3/50
+#   45/45 ━━━━━━━━━━ 1s 23ms/step - loss: 0.3421 - accuracy: 0.8712 - val_loss: 0.4102 - val_accuracy: 0.8401
+_EPOCH_NUM_RE  = re.compile(r"^Epoch\s+(\d+)/(\d+)", re.MULTILINE)
+_EPOCH_STAT_RE = re.compile(
+    r"(?:loss:\s*([\d.]+))?"
+    r"(?:.*?accuracy:\s*([\d.]+))?"
+    r"(?:.*?val_loss:\s*([\d.]+))?"
+    r"(?:.*?val_accuracy:\s*([\d.]+))?",
+)
+
+
+def _parse_epoch_metrics(line: str, current_epoch: int, total_epochs: int) -> dict | None:
+    """Return a metrics dict if `line` contains Keras per-epoch stats, else None."""
+    # Step line ends with metric values (contains "loss:" but not "Epoch N/N")
+    if "loss:" not in line or _EPOCH_NUM_RE.match(line):
+        return None
+    m = _EPOCH_STAT_RE.search(line)
+    if not m or not any(m.groups()):
+        return None
+
+    def _f(v: str | None) -> float | None:
+        try:
+            return round(float(v), 4) if v else None
+        except ValueError:
+            return None
+
+    return {
+        "epoch"       : current_epoch,
+        "total_epochs": total_epochs,
+        "loss"        : _f(m.group(1)),
+        "accuracy"    : _f(m.group(2)),
+        "val_loss"    : _f(m.group(3)),
+        "val_accuracy": _f(m.group(4)),
+    }
 
 
 @celery_app.task(bind=True, name="tasks.run_compilation_task")
@@ -49,50 +103,97 @@ def run_compilation_task(self, session_id: str) -> dict:
     output_dir  = session_dir / "output"
 
     if not script_path.exists():
-        self.update_state(state="FAILURE", meta={"error": "No generated script found for this session"})
-        raise FileNotFoundError("generated_script.py not found")
+        raise FileNotFoundError("No generated script found for this session")
 
     code = script_path.read_text()
+    validate_code(code)
 
-    try:
-        validate_code(code)
-    except ValueError as e:
-        self.update_state(state="FAILURE", meta={"error": str(e)})
-        raise
-
-    self.update_state(state="PROGRESS", meta={"step": "compiling", "progress": 10})
+    self.update_state(state="PROGRESS", meta={"step": "Compiling…", "progress": 5})
 
     safe_env = {
-        "PATH"            : "/usr/bin:/bin",
+        "PATH"            : "/usr/local/bin:/usr/bin:/bin",
         "PYTHONUNBUFFERED": "1",
         "HOME"            : str(session_dir),
         "PYTHONPATH"      : "",
     }
 
     try:
-        result = subprocess.run(
-            ["python", "-u", str(script_path)],
-            capture_output=True,
+        proc = subprocess.Popen(
+            ["python3", "-u", str(script_path)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             text=True,
-            timeout=300,
-            cwd=str(output_dir),
+            cwd=str(session_dir),
             env=safe_env,
         )
-    except subprocess.TimeoutExpired:
-        msg = "Compilation timed out (5 minute limit)"
-        self.update_state(state="FAILURE", meta={"error": msg})
-        raise RuntimeError(msg)
+    except Exception as e:
+        raise RuntimeError(f"Failed to start subprocess: {e}") from e
 
-    if result.returncode != 0:
-        error_msg = (result.stderr or result.stdout or "Unknown error")[-2000:]
-        self.update_state(state="FAILURE", meta={"error": error_msg})
+    current_epoch = 0
+    total_epochs  = 0
+    stdout_lines: list[str] = []
+    metrics_log:  list[dict] = []
+    tf_loaded     = False
+
+    try:
+        for raw_line in proc.stdout:  # type: ignore[union-attr]
+            line = raw_line.rstrip()
+            stdout_lines.append(line)
+
+            # TensorFlow startup messages — show loading state until first epoch
+            if not tf_loaded and not current_epoch:
+                low = line.lower()
+                if any(tok in low for tok in ("tensorflow", "keras", "cuda", "gpu", "cpu", "using")):
+                    tf_loaded = True
+                    self.update_state(state="PROGRESS", meta={
+                        "step"    : "Loading TensorFlow…",
+                        "progress": 8,
+                    })
+                    continue
+
+            # Detect "Epoch N/T" header
+            em = _EPOCH_NUM_RE.match(line)
+            if em:
+                current_epoch = int(em.group(1))
+                total_epochs  = int(em.group(2))
+                if current_epoch == 1:
+                    self.update_state(state="PROGRESS", meta={
+                        "step"    : "Building model…",
+                        "progress": 15,
+                    })
+                progress = max(18, min(90, int(18 + 72 * (current_epoch - 1) / max(total_epochs, 1))))
+                self.update_state(state="PROGRESS", meta={
+                    "step"   : f"Epoch {current_epoch}/{total_epochs}",
+                    "progress": progress,
+                })
+                continue
+
+            # Detect metric line
+            metrics = _parse_epoch_metrics(line, current_epoch, total_epochs)
+            if metrics:
+                metrics_log.append(metrics)
+                progress = max(18, min(90, int(18 + 72 * current_epoch / max(total_epochs, 1))))
+                self.update_state(state="PROGRESS", meta={
+                    "step"    : f"Epoch {current_epoch}/{total_epochs}",
+                    "progress": progress,
+                    "metrics" : metrics,
+                })
+    except Exception:
+        pass
+
+    try:
+        proc.wait(timeout=300)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        raise RuntimeError("Compilation timed out (5 minute limit)")
+
+    if proc.returncode != 0:
+        error_msg = "\n".join(stdout_lines)[-2000:] or "Unknown error"
         raise RuntimeError(f"Script failed:\n{error_msg}")
 
     keras_files = list(output_dir.glob("*.keras"))
     if not keras_files:
-        msg = "No .keras files produced — ensure the script calls model.save('<name>.keras')"
-        self.update_state(state="FAILURE", meta={"error": msg})
-        raise FileNotFoundError(msg)
+        raise FileNotFoundError("No .keras files produced — ensure the script calls model.save('<name>.keras')")
 
     return {
         "status" : "success",

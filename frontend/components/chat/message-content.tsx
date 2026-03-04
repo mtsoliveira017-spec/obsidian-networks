@@ -2,7 +2,7 @@
 
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useMemo, memo } from 'react'
 import { Copy, Check } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -35,15 +35,18 @@ function useCopy(text: string) {
 // ── Code block with copy button ───────────────────────────────────────────────
 
 interface CodeBlockProps {
-  language : string
-  code     : string
+  language   : string
+  code       : string
+  isStreaming: boolean
 }
 
-function CodeBlock({ language, code }: CodeBlockProps) {
+const CodeBlock = memo(function CodeBlock({ language, code, isStreaming }: CodeBlockProps) {
   const [html, setHtml] = useState<string | null>(null)
   const { copied, copy } = useCopy(code)
 
+  // Only highlight once streaming stops — prevents per-chunk flicker
   useEffect(() => {
+    if (isStreaming) return
     let cancelled = false
     getHighlighter().then(hl => {
       if (cancelled) return
@@ -51,7 +54,12 @@ function CodeBlock({ language, code }: CodeBlockProps) {
       setHtml(hl.codeToHtml(code, { lang, theme: 'one-dark-pro' }))
     })
     return () => { cancelled = true }
-  }, [code, language])
+  }, [code, language, isStreaming])
+
+  // Clear highlight when a new stream starts (e.g. model update request)
+  useEffect(() => {
+    if (isStreaming) setHtml(null)
+  }, [isStreaming])
 
   return (
     <div className="group/code relative my-2 rounded-lg overflow-hidden border border-zinc-800">
@@ -87,7 +95,7 @@ function CodeBlock({ language, code }: CodeBlockProps) {
       }
     </div>
   )
-}
+})
 
 // ── Message content ───────────────────────────────────────────────────────────
 
@@ -98,81 +106,87 @@ interface MessageContentProps {
 }
 
 export function MessageContent({ content, isStreaming = false, className }: MessageContentProps) {
+  // Memoized so ReactMarkdown doesn't recreate all renderers on every streaming chunk
+  const components = useMemo(() => ({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    code({ className: cls, children, ...props }: any) {
+      const match   = /language-(\w+)/.exec(cls ?? '')
+      const lang    = match?.[1] ?? 'text'
+      const code    = String(children).replace(/\n$/, '')
+      const isBlock = code.includes('\n') || match !== null
+
+      if (!isBlock) {
+        return (
+          <code
+            className="rounded bg-zinc-800 px-1.5 py-0.5 font-mono text-xs text-zinc-200"
+            {...props}
+          >
+            {children}
+          </code>
+        )
+      }
+
+      return <CodeBlock language={lang} code={code} isStreaming={isStreaming} />
+    },
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    p({ children }: any) {
+      return <p className="mb-3 last:mb-0 leading-relaxed">{children}</p>
+    },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ul({ children }: any) {
+      return <ul className="my-2 list-disc pl-5 space-y-1">{children}</ul>
+    },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ol({ children }: any) {
+      return <ol className="my-2 list-decimal pl-5 space-y-1">{children}</ol>
+    },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    h1({ children }: any) {
+      return <h1 className="mb-2 mt-4 text-lg font-semibold">{children}</h1>
+    },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    h2({ children }: any) {
+      return <h2 className="mb-2 mt-3 text-base font-semibold">{children}</h2>
+    },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    h3({ children }: any) {
+      return <h3 className="mb-1 mt-2 text-sm font-semibold">{children}</h3>
+    },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    table({ children }: any) {
+      return (
+        <div className="overflow-x-auto">
+          <table className="w-full border-collapse text-sm">{children}</table>
+        </div>
+      )
+    },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    th({ children }: any) {
+      return (
+        <th className="border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-left font-medium text-zinc-200">
+          {children}
+        </th>
+      )
+    },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    td({ children }: any) {
+      return <td className="border border-zinc-700 px-3 py-1.5 text-zinc-300">{children}</td>
+    },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    blockquote({ children }: any) {
+      return (
+        <blockquote className="border-l-2 border-[#39FF14]/40 pl-4 italic text-zinc-400">
+          {children}
+        </blockquote>
+      )
+    },
+  // isStreaming must be in deps so CodeBlock receives the updated prop when streaming ends
+  }), [isStreaming])
+
   return (
     <div className={cn('prose prose-sm prose-invert max-w-none', className)}>
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          code({ className: cls, children, ...props }) {
-            const match   = /language-(\w+)/.exec(cls ?? '')
-            const lang    = match?.[1] ?? 'text'
-            const code    = String(children).replace(/\n$/, '')
-            const isBlock = code.includes('\n') || match !== null
-
-            if (!isBlock) {
-              return (
-                <code
-                  className="rounded bg-zinc-800 px-1.5 py-0.5 font-mono text-xs text-zinc-200"
-                  {...props}
-                >
-                  {children}
-                </code>
-              )
-            }
-
-            return <CodeBlock language={lang} code={code} />
-          },
-
-          p({ children }) {
-            return <p className="mb-3 last:mb-0 leading-relaxed">{children}</p>
-          },
-
-          ul({ children }) {
-            return <ul className="my-2 list-disc pl-5 space-y-1">{children}</ul>
-          },
-          ol({ children }) {
-            return <ol className="my-2 list-decimal pl-5 space-y-1">{children}</ol>
-          },
-
-          h1({ children }) {
-            return <h1 className="mb-2 mt-4 text-lg font-semibold">{children}</h1>
-          },
-          h2({ children }) {
-            return <h2 className="mb-2 mt-3 text-base font-semibold">{children}</h2>
-          },
-          h3({ children }) {
-            return <h3 className="mb-1 mt-2 text-sm font-semibold">{children}</h3>
-          },
-
-          table({ children }) {
-            return (
-              <div className="overflow-x-auto">
-                <table className="w-full border-collapse text-sm">{children}</table>
-              </div>
-            )
-          },
-          th({ children }) {
-            return (
-              <th className="border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-left font-medium text-zinc-200">
-                {children}
-              </th>
-            )
-          },
-          td({ children }) {
-            return (
-              <td className="border border-zinc-700 px-3 py-1.5 text-zinc-300">{children}</td>
-            )
-          },
-
-          blockquote({ children }) {
-            return (
-              <blockquote className="border-l-2 border-[#39FF14]/40 pl-4 italic text-zinc-400">
-                {children}
-              </blockquote>
-            )
-          },
-        }}
-      >
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
         {content}
       </ReactMarkdown>
 

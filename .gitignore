@@ -9,6 +9,7 @@ package-lock.json
 backend/.env
 frontend/.env.local
 
+
 # .env.example files are intentionally committed (no real secrets)
 !.env.example
 !backend/.env.example
@@ -23,6 +24,10 @@ backend/.venv/
 # Session data (ephemeral runtime files)
 sessions/
 /tmp/obsidian-sessions/
+
+# Redis persistence files (runtime artifacts)
+dump.rdb
+*.rdb
 
 # Next.js build output
 frontend/.next/

@@ -16,6 +16,10 @@ COPY . .
 
 ENV NEXT_TELEMETRY_DISABLED=1
 
+# INTERNAL_API_URL is needed at build time so next.config.ts can bake it in
+ARG INTERNAL_API_URL=http://api:8000
+ENV INTERNAL_API_URL=${INTERNAL_API_URL}
+
 RUN npm run build
 
 # ── Stage 3: production runtime ───────────────────────────────────────────────

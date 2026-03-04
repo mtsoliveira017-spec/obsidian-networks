@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useMemo } from 'react'
 import { ENVIRONMENT_OPTIONS, type HardwareTier } from '@/lib/environment'
 import { useEnvironment } from '@/hooks/use-environment'
 import {
@@ -25,8 +25,9 @@ import {
   NotebookText, Brain, Monitor, Cpu,
   Table2, Clock, Type, ImageIcon,
   AlertTriangle, CheckCircle2,
-  Download, Play, XCircle,
+  Download, Play, XCircle, Loader2,
 } from 'lucide-react'
+import { TrainingChart, type EpochMetrics } from './training-chart'
 
 const TYPE_CONFIG: Record<string, { label: string; Icon: React.ElementType; color: string }> = {
   tabular     : { label: 'Tabular',      Icon: Table2,    color: 'text-[#39FF14] border-[#39FF14]/30 bg-[#39FF14]/10' },
@@ -197,6 +198,120 @@ interface CompileState {
   error   : string | null
 }
 
+// ── Stage definitions ──────────────────────────────────────────────────────
+const STAGES = [
+  { key: 'queue',    label: 'Queued',             maxProgress: 5  },
+  { key: 'loading',  label: 'Loading TensorFlow', maxProgress: 15 },
+  { key: 'building', label: 'Building model',     maxProgress: 18 },
+  { key: 'training', label: 'Training',           maxProgress: 100 },
+]
+
+function stepToStage(step: string, progress: number): number {
+  if (step.startsWith('Epoch') || progress > 18) return 3
+  if (step.includes('Building'))                  return 2
+  if (step.includes('Loading'))                   return 1
+  return 0
+}
+
+function CompileRunningState({
+  compile,
+  metrics,
+}: {
+  compile: CompileState
+  metrics: EpochMetrics[]
+}) {
+  const stageIdx = stepToStage(compile.step, compile.progress)
+
+  // Elapsed timer
+  const [elapsed, setElapsed] = useState(0)
+  const startRef = useRef(Date.now())
+  useEffect(() => {
+    startRef.current = Date.now()
+    setElapsed(0)
+    const id = setInterval(() => setElapsed(Math.floor((Date.now() - startRef.current) / 1000)), 1000)
+    return () => clearInterval(id)
+  }, [])
+  const elapsedStr = useMemo(() => {
+    const m = Math.floor(elapsed / 60)
+    const s = elapsed % 60
+    return m > 0 ? `${m}m ${s}s` : `${s}s`
+  }, [elapsed])
+
+  const isEarlyStage = stageIdx < 3
+
+  return (
+    <div className="rounded-lg border border-[#39FF14]/20 bg-[#39FF14]/3 p-4 space-y-4 relative overflow-hidden">
+
+      {/* Animated border shimmer */}
+      <div className="pointer-events-none absolute inset-0 rounded-lg">
+        <div className="absolute inset-x-0 top-0 h-px bg-linear-to-r from-transparent via-[#39FF14]/60 to-transparent animate-[shimmer_2.5s_ease-in-out_infinite]" />
+      </div>
+
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <div className="relative flex h-2.5 w-2.5 items-center justify-center">
+            <span className="absolute inline-flex h-full w-full rounded-full bg-[#39FF14]/40 animate-ping" />
+            <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-[#39FF14]" />
+          </div>
+          <span className="text-xs font-medium text-zinc-300">
+            {compile.step || 'Starting…'}
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="font-mono text-[10px] text-zinc-500">{elapsedStr}</span>
+          <span className="font-mono text-xs font-medium text-[#39FF14]">{compile.progress}%</span>
+        </div>
+      </div>
+
+      {/* Stage track */}
+      <div className="flex items-center gap-1">
+        {STAGES.map((stage, i) => {
+          const done    = i < stageIdx
+          const active  = i === stageIdx
+          return (
+            <div key={stage.key} className="flex flex-1 flex-col items-center gap-1">
+              <div className={`h-0.5 w-full rounded-full transition-all duration-700 ${
+                done   ? 'bg-[#39FF14]' :
+                active ? 'bg-[#39FF14]/50 animate-pulse' :
+                         'bg-zinc-800'
+              }`} />
+              <span className={`text-[9px] font-medium transition-colors duration-300 ${
+                done   ? 'text-[#39FF14]/70' :
+                active ? 'text-[#39FF14]' :
+                         'text-zinc-700'
+              }`}>{stage.label}</span>
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Progress bar with shimmer */}
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-800/80">
+        <div
+          className="relative h-full rounded-full bg-[#39FF14] transition-all duration-700 ease-out overflow-hidden"
+          style={{ width: `${Math.max(compile.progress, 3)}%` }}
+        >
+          <div className="absolute inset-0 bg-linear-to-r from-transparent via-white/30 to-transparent animate-[shimmer_1.8s_ease-in-out_infinite]" />
+        </div>
+      </div>
+
+      {/* Silent stage placeholder — shows skeleton dots when waiting for TF */}
+      {isEarlyStage && metrics.length === 0 && (
+        <div className="flex items-center gap-1.5">
+          <Loader2 className="h-3 w-3 text-zinc-600 animate-spin" />
+          <span className="text-[10px] text-zinc-600 animate-pulse">
+            {stageIdx === 0 ? 'Waiting for worker…' : 'Initialising runtime, this can take 30–60s…'}
+          </span>
+        </div>
+      )}
+
+      {/* Chart once we have data */}
+      <TrainingChart metrics={metrics} />
+    </div>
+  )
+}
+
 function CompileSection({
   sessionId,
   status,
@@ -207,6 +322,7 @@ function CompileSection({
   const [compile, setCompile] = useState<CompileState>({
     phase: 'idle', progress: 0, step: '', error: null,
   })
+  const [metrics, setMetrics] = useState<EpochMetrics[]>([])
   const esRef = useRef<EventSource | null>(null)
 
   // Clean up SSE on unmount
@@ -224,6 +340,7 @@ function CompileSection({
 
   const startCompile = async () => {
     setCompile({ phase: 'running', progress: 0, step: 'Queuing…', error: null })
+    setMetrics([])
 
     const result = await triggerCompile(sessionId)
     if (!result) {
@@ -237,6 +354,7 @@ function CompileSection({
     es.onmessage = (e) => {
       const data = JSON.parse(e.data) as {
         state: string; progress: number; step: string; error?: string
+        metrics?: EpochMetrics
       }
       if (data.state === 'SUCCESS') {
         es.close()
@@ -250,6 +368,9 @@ function CompileSection({
           progress: data.progress ?? prev.progress,
           step    : data.step    ?? prev.step,
         }))
+        if (data.metrics) {
+          setMetrics(prev => [...prev, data.metrics!])
+        }
       }
     }
 
@@ -279,21 +400,7 @@ function CompileSection({
         )}
 
         {compile.phase === 'running' && (
-          <div className="space-y-2">
-            <div className="flex items-center justify-between text-xs">
-              <span className="text-zinc-400">{compile.step || 'Running…'}</span>
-              <span className="font-mono text-[#39FF14]">{compile.progress}%</span>
-            </div>
-            <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-800">
-              <div
-                className="h-full rounded-full bg-[#39FF14] transition-all duration-500"
-                style={{ width: `${compile.progress}%` }}
-              />
-            </div>
-            <p className="text-[10px] text-zinc-600">
-              This may take several minutes depending on dataset size
-            </p>
-          </div>
+          <CompileRunningState compile={compile} metrics={metrics} />
         )}
 
         {compile.phase === 'error' && (

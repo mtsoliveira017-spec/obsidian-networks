@@ -30,7 +30,7 @@ export function getProvider(): Provider {
 
 export function getModel() {
   const provider = getProvider()
-  const modelId  = process.env.AI_MODEL ?? DEFAULTS[provider] ?? DEFAULTS.anthropic
+  const modelId  = process.env.AI_MODEL || DEFAULTS[provider] || DEFAULTS.anthropic
 
   switch (provider) {
     case 'openai': {
