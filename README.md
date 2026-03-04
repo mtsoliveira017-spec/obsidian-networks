@@ -160,13 +160,18 @@ Generated scripts automatically save matplotlib figures to the session output di
 
 ### Multi-Provider LLM
 
-Switch between providers without changing your workflow. Prompt caching is enabled automatically for Anthropic to reduce latency and cost on long sessions.
+Switch between providers without changing your workflow. Each provider uses the most efficient context management strategy available.
 
 | Provider | Type | Notes |
 |----------|------|-------|
 | **Anthropic** | Cloud | Claude Opus 4.6, Sonnet 4.6, Haiku 4.5 |
 | **OpenAI** | Cloud | GPT-4o, o3, any available model |
 | **LM Studio** | Local | Any OpenAI-compatible local model |
+
+**Context efficiency per provider:**
+
+- **Anthropic** — Prompt caching (`cache_control: ephemeral`) is applied to the system prompt on every request, so the ~2k-token system prompt is read from cache rather than re-processed each turn. Server-side `contextManagement` automatically clears old tool-use results (arXiv abstracts, TF doc fetches) when the context approaches 60k input tokens, keeping only the 3 most recent tool turns. This dramatically reduces cost and latency on long sessions.
+- **OpenAI / LM Studio** — `pruneMessages` strips tool call results older than the last 5 message turns before sending, keeping the context window lean without losing conversation continuity.
 
 ---
 
@@ -417,6 +422,12 @@ Each session's files are isolated in a per-session directory that no other sessi
 ---
 
 ## Recent Updates
+
+### v0.5.0 — Context Efficiency
+- **Anthropic**: system prompt cached via `cache_control: ephemeral` — reduces cost and latency on every request
+- **Anthropic**: server-side `contextManagement` automatically clears old tool-use results (arXiv/TF doc fetches) when context exceeds 60k tokens, keeping the last 3 tool turns
+- **OpenAI / LM Studio**: `pruneMessages` strips tool call results older than the last 5 message turns before sending
+- Long sessions no longer hit rate limits or degrade in quality as conversation history grows
 
 ### v0.4.0 — Docker Sandbox + Plot Gallery
 - Worker container hardened with seccomp profile, capability restrictions, and resource limits

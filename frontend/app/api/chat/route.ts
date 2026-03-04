@@ -1,4 +1,4 @@
-import { streamText, convertToModelMessages, tool, stepCountIs, type UIMessage } from 'ai'
+import { streamText, convertToModelMessages, pruneMessages, tool, stepCountIs, type UIMessage } from 'ai'
 import { z } from 'zod'
 import { getModel, getProvider } from '@/lib/model'
 
@@ -338,14 +338,40 @@ export async function POST(req: Request) {
   const maxHistory = MAX_HISTORY_MSGS[provider] ?? 30
 
   // Keep last N message turns to stay within context window limits
-  const modelMessages = await convertToModelMessages(messages.slice(-maxHistory))
+  const rawMessages = await convertToModelMessages(messages.slice(-maxHistory))
+
+  // For OpenAI / LM Studio: prune old tool call results from history to keep
+  // context lean (arXiv abstracts and TF doc fetches are large).
+  // For Anthropic: use server-side contextManagement instead (see providerOptions).
+  const modelMessages = provider !== 'anthropic'
+    ? pruneMessages({ messages: rawMessages, toolCalls: 'before-last-5-messages' })
+    : rawMessages
 
   const result = streamText({
     model          : getModel(),
     system         : SYSTEM,
     messages       : modelMessages,
     tools          : { ...researchTools, create_notebook: createNotebookTool(sessionId) },
-    stopWhen: stepCountIs(10),
+    stopWhen       : stepCountIs(10),
+    // Anthropic: auto-clear old tool uses server-side when context grows large.
+    // Keeps the last 3 tool-use turns; strips tool inputs (large doc fetches).
+    providerOptions: provider === 'anthropic' ? {
+      anthropic: {
+        contextManagement: {
+          edits: [
+            {
+              type           : 'clear_tool_uses_20250919',
+              trigger        : { type: 'input_tokens', value: 60000 },
+              keep           : { type: 'tool_uses', value: 3 },
+              clearToolInputs: true,
+            },
+          ],
+        },
+      },
+    } : undefined,
+    onError: ({ error }) => {
+      console.error('[streamText error]', error)
+    },
   })
 
   return result.toUIMessageStreamResponse()
