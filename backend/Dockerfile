@@ -31,7 +31,9 @@ RUN pip install --no-cache-dir --prefix=/install \
     "httpx>=0.27.0" \
     "beautifulsoup4>=4.12.0" \
     "feedparser>=6.0.0" \
-    "nbformat>=5.10.0"
+    "nbformat>=5.10.0" \
+    "matplotlib>=3.8.0" \
+    "seaborn>=0.13.0"
 
 # ── Stage 2: runtime image ────────────────────────────────────────────────────
 FROM python:3.11-slim AS runtime
