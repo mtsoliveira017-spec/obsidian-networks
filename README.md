@@ -207,7 +207,9 @@ git clone https://github.com/sup3rus3r/obsidian-networks.git
 cd obsidian-networks
 
 cp .env.example .env
-# Open .env and set ANTHROPIC_API_KEY (or OPENAI_API_KEY, or LMSTUDIO_BASE_URL)
+# Open .env and set:
+#   AUTH_SECRET — generate one with: openssl rand -base64 32
+#   ANTHROPIC_API_KEY (or OPENAI_API_KEY, or LMSTUDIO_BASE_URL)
 
 docker compose up --build
 ```
