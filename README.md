@@ -277,6 +277,11 @@ docker compose up --build
 
 Open [http://localhost:3000](http://localhost:3000).
 
+> **After changing backend code or environment variables**, rebuild only the worker (faster than a full rebuild):
+> ```bash
+> docker compose build worker && docker compose up -d worker
+> ```
+
 ### Local Development
 
 **Requirements:** Python 3.11+, [uv](https://docs.astral.sh/uv/), Node.js 18+, Redis (`sudo apt install redis` / `brew install redis`)
@@ -400,22 +405,23 @@ Generated scripts are validated at the AST level before execution. An allowlist 
 
 ### Subprocess Isolation
 
-Scripts run in a subprocess with a stripped environment — only `PATH`, `HOME`, and `PYTHONUNBUFFERED` are set — with a 5-minute hard timeout. Per-process resource limits are applied on Linux via `resource.setrlimit`:
+Scripts run in a subprocess with a stripped environment — only `PATH`, `HOME`, `PYTHONUNBUFFERED`, and TensorFlow thread-count variables are set — with a configurable hard timeout (default: 10 minutes). Per-process resource limits are applied on Linux via `resource.setrlimit`:
 
-| Limit | Value | Purpose |
-|---|---|---|
-| CPU time (`RLIMIT_CPU`) | 360s soft / 400s hard | Prevents runaway training loops |
-| File size (`RLIMIT_FSIZE`) | 2 GB | Prevents disk-fill attacks |
-| Address space (`RLIMIT_AS`) | 6 GB | Caps memory allocation |
+| Limit | Value | Env var | Purpose |
+|---|---|---|---|
+| CPU time (`RLIMIT_CPU`) | 600s soft / 660s hard | `MAX_TRAINING_MINUTES` | Prevents runaway training loops |
+| File size (`RLIMIT_FSIZE`) | 10 GB | `MAX_OUTPUT_GB` | Prevents disk-fill attacks |
+
+Memory is capped at the Docker container level (`mem_limit`) rather than via `RLIMIT_AS` — virtual address space limits cause TensorFlow thread-pool failures when `RLIMIT_AS` is set too low.
 
 ### Docker Sandbox
 
 The Celery worker container runs with an additional layer of Docker-level hardening:
 
-- **Seccomp profile** (`worker-seccomp.json`): Blocks dangerous syscalls including `ptrace`, `mount`, `pivot_root`, `clone`, `bpf`, `kexec_load`, `add_key`, and others
+- **Seccomp profile** (`worker-seccomp.json`): Blocks dangerous syscalls including `ptrace`, `mount`, `pivot_root`, `bpf`, `kexec_load`, `add_key`, and others. `clone` is permitted (required by `subprocess.Popen`); namespace-related syscalls (`unshare`, `setns`, `pivot_root`) remain blocked.
 - **Capability restrictions**: `cap_drop: ALL` with only `DAC_OVERRIDE`, `SETUID`, `SETGID`, and `CHOWN` re-added
-- **Process limits**: `nproc=256`, `nofile=1024/2048`
-- **Memory cap**: 4 GB RAM + 4 GB swap
+- **Process limits**: `nproc=65536`, `nofile=65536` (TensorFlow and data loaders spawn many threads)
+- **Memory cap**: `mem_limit` default 12 GB RAM + 16 GB swap (configurable via `MAX_MEMORY_GB`)
 
 Each session's files are isolated in a per-session directory that no other session can access.
 

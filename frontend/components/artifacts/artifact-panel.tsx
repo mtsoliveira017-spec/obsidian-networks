@@ -6,11 +6,13 @@ import { useEnvironment } from '@/hooks/use-environment'
 import {
   getDatasetAnalysis,
   getArtifactStatus,
+  getPlatformLimits,
   downloadNotebook,
   downloadModelFile,
   triggerCompile,
   type DatasetAnalysis,
   type ArtifactStatus,
+  type PlatformLimits,
 } from '@/app/api/platform'
 import {
   Select,
@@ -510,12 +512,17 @@ const POLL_INTERVAL = 4_000   // ms between status checks
 export function ArtifactPanel({ sessionId }: ArtifactPanelProps) {
   const [analysis,      setAnalysis]      = useState<DatasetAnalysis | null>(null)
   const [status,        setStatus]        = useState<ArtifactStatus>({ notebook: false, models: [], images: [], epochs_run: null, epochs_max: null })
+  const [limits,        setLimits]        = useState<PlatformLimits | null>(null)
   const [awaitingPlots, setAwaitingPlots] = useState(false)
   const pollRef                           = useRef<ReturnType<typeof setInterval> | null>(null)
   const fastPollRef                       = useRef<ReturnType<typeof setInterval> | null>(null)
   const fastPollStart                     = useRef<number>(0)
   const FAST_POLL_MS                      = 500
   const FAST_POLL_TIMEOUT_MS              = 30_000  // stop fast-polling after 30s
+
+  useEffect(() => {
+    getPlatformLimits().then(l => { if (l) setLimits(l) })
+  }, [])
 
   useEffect(() => {
     if (!sessionId) return
@@ -637,27 +644,27 @@ export function ArtifactPanel({ sessionId }: ArtifactPanelProps) {
         <div className="space-y-1.5 text-[11px] text-zinc-500">
           <div className="flex justify-between">
             <span>Max training time</span>
-            <span className="font-mono text-zinc-400">10 min</span>
+            <span className="font-mono text-zinc-400">{limits ? `${limits.max_training_minutes} min` : '…'}</span>
           </div>
           <div className="flex justify-between">
             <span>Max dataset size</span>
-            <span className="font-mono text-zinc-400">500 MB</span>
+            <span className="font-mono text-zinc-400">{limits ? `${limits.max_dataset_mb} MB` : '…'}</span>
           </div>
           <div className="flex justify-between">
             <span>Max memory</span>
-            <span className="font-mono text-zinc-400">12 GB</span>
+            <span className="font-mono text-zinc-400">{limits ? `${limits.max_memory_gb} GB` : '…'}</span>
           </div>
           <div className="flex justify-between">
             <span>Max output files</span>
-            <span className="font-mono text-zinc-400">10 GB</span>
+            <span className="font-mono text-zinc-400">{limits ? `${limits.max_output_gb} GB` : '…'}</span>
           </div>
           <div className="flex justify-between">
             <span>Session TTL</span>
-            <span className="font-mono text-zinc-400">4 hrs</span>
+            <span className="font-mono text-zinc-400">{limits ? `${limits.session_ttl_hours} hrs` : '…'}</span>
           </div>
           <div className="flex justify-between">
             <span>Max epochs</span>
-            <span className="font-mono text-zinc-400">200</span>
+            <span className="font-mono text-zinc-400">{limits ? limits.max_epochs : '…'}</span>
           </div>
         </div>
       </div>

@@ -3,6 +3,7 @@
 // In local dev: next.config.ts rewrites to http://localhost:8000.
 
 export const AppRoutes = {
+  PlatformLimits:     ()            => `/api/platform/limits`,
   CreateSession:      ()            => `/api/platform/session`,
   UploadDataset:      (sid: string) => `/api/platform/upload/${sid}`,
   PreviewDataset:     (sid: string) => `/api/platform/preview/${sid}`,

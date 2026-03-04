@@ -10,8 +10,11 @@ load_dotenv()
 
 from celery import Celery
 
-REDIS_URL    = os.environ.get("REDIS_URL", "redis://redis:6379/0")
-SESSIONS_DIR = Path(os.environ.get("SESSIONS_DIR", "/sessions"))
+REDIS_URL           = os.environ.get("REDIS_URL", "redis://redis:6379/0")
+SESSIONS_DIR        = Path(os.environ.get("SESSIONS_DIR", "/sessions"))
+MAX_TRAINING_MINUTES = int(os.environ.get("MAX_TRAINING_MINUTES", "10"))
+MAX_OUTPUT_GB        = int(os.environ.get("MAX_OUTPUT_GB", "10"))
+MAX_EPOCHS           = int(os.environ.get("MAX_EPOCHS", "200"))
 
 ALLOWED_IMPORTS = {
     "tensorflow", "keras", "numpy", "pandas",
@@ -112,22 +115,30 @@ def run_compilation_task(self, session_id: str) -> dict:
     self.update_state(state="PROGRESS", meta={"step": "Compiling…", "progress": 5})
 
     safe_env = {
-        "PATH"            : "/usr/local/bin:/usr/bin:/bin",
-        "PYTHONUNBUFFERED": "1",
-        "HOME"            : str(session_dir),
-        "PYTHONPATH"      : "",
+        "PATH"                   : "/usr/local/bin:/usr/bin:/bin",
+        "PYTHONUNBUFFERED"       : "1",
+        "HOME"                   : str(session_dir),
+        "PYTHONPATH"             : "",
+        # Limit TF thread pools to prevent pthread_create() exhaustion
+        # TF spawns interop + intraop + data pipeline threads per epoch;
+        # without limits these accumulate and exhaust the container's nproc.
+        "TF_NUM_INTEROP_THREADS" : "2",
+        "TF_NUM_INTRAOP_THREADS" : "2",
+        "OMP_NUM_THREADS"        : "4",
     }
 
     def _apply_limits():
-        """Set per-process resource limits (Linux only)."""
+        """Set per-process resource limits (Linux only).
+        Note: RLIMIT_AS is intentionally not set — TF spawns many threads each
+        needing virtual address space, so AS limits cause pthread_create failures.
+        Memory is capped at the Docker container level (mem_limit in compose).
+        """
         if sys.platform == "linux":
             import resource
-            # Max CPU time: 600s soft / 660s hard (10 min training budget)
-            resource.setrlimit(resource.RLIMIT_CPU, (600, 660))
-            # Max output file size: 10 GB (large model checkpoints + datasets)
-            resource.setrlimit(resource.RLIMIT_FSIZE, (10 * 1024 ** 3, 10 * 1024 ** 3))
-            # Max address space: 12 GB (matches container mem_limit for complex models)
-            resource.setrlimit(resource.RLIMIT_AS, (12 * 1024 ** 3, 12 * 1024 ** 3))
+            cpu_soft = MAX_TRAINING_MINUTES * 60
+            cpu_hard = cpu_soft + 60
+            resource.setrlimit(resource.RLIMIT_CPU,   (cpu_soft, cpu_hard))
+            resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_OUTPUT_GB * 1024 ** 3, MAX_OUTPUT_GB * 1024 ** 3))
 
     try:
         proc = subprocess.Popen(
@@ -195,10 +206,10 @@ def run_compilation_task(self, session_id: str) -> dict:
         pass
 
     try:
-        proc.wait(timeout=600)
+        proc.wait(timeout=MAX_TRAINING_MINUTES * 60)
     except subprocess.TimeoutExpired:
         proc.kill()
-        raise RuntimeError("Compilation timed out (10 minute limit)")
+        raise RuntimeError(f"Compilation timed out ({MAX_TRAINING_MINUTES} minute limit)")
 
     if proc.returncode != 0:
         error_msg = "\n".join(stdout_lines)[-2000:] or "Unknown error"

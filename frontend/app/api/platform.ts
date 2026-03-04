@@ -1,5 +1,24 @@
 import { AppRoutes } from './routes'
 
+export interface PlatformLimits {
+  max_training_minutes : number
+  max_dataset_mb       : number
+  max_memory_gb        : number
+  max_output_gb        : number
+  session_ttl_hours    : number
+  max_epochs           : number
+}
+
+export const getPlatformLimits = async (): Promise<PlatformLimits | null> => {
+  try {
+    const res = await fetch(AppRoutes.PlatformLimits())
+    if (!res.ok) return null
+    return res.json()
+  } catch {
+    return null
+  }
+}
+
 export const createSession = async (): Promise<{ session_id: string } | null> => {
   try {
     const res = await fetch(AppRoutes.CreateSession(), { method: 'POST', credentials: 'include' })

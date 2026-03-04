@@ -29,9 +29,13 @@ try:
 except ImportError:
     _HAS_MAGIC = False
 
-SESSIONS_DIR    = Path(os.environ.get("SESSIONS_DIR", "/sessions"))
-MAX_FILE_BYTES  = int(os.environ.get("MAX_FILE_SIZE_MB", "500")) * 1024 * 1024
-SESSION_TTL     = int(os.environ.get("SESSION_TTL_HOURS", "4")) * 3600
+SESSIONS_DIR         = Path(os.environ.get("SESSIONS_DIR", "/sessions"))
+MAX_FILE_BYTES       = int(os.environ.get("MAX_FILE_SIZE_MB", "500")) * 1024 * 1024
+SESSION_TTL          = int(os.environ.get("SESSION_TTL_HOURS", "4")) * 3600
+MAX_TRAINING_MINUTES = int(os.environ.get("MAX_TRAINING_MINUTES", "10"))
+MAX_MEMORY_GB        = int(os.environ.get("MAX_MEMORY_GB", "12"))
+MAX_OUTPUT_GB        = int(os.environ.get("MAX_OUTPUT_GB", "10"))
+MAX_EPOCHS           = int(os.environ.get("MAX_EPOCHS", "200"))
 
 ALLOWED_EXTENSIONS = {".csv", ".json"}
 ALLOWED_MIME_TYPES = {"text/csv", "application/json", "text/plain", "application/octet-stream"}
@@ -42,6 +46,19 @@ router = APIRouter(prefix="/platform")
 @router.get("/health")
 async def platform_health():
     return {"status": "ok"}
+
+
+@router.get("/limits")
+async def platform_limits():
+    """Return the current platform resource limits (driven by env vars)."""
+    return {
+        "max_training_minutes": MAX_TRAINING_MINUTES,
+        "max_dataset_mb"      : MAX_FILE_BYTES // (1024 * 1024),
+        "max_memory_gb"       : MAX_MEMORY_GB,
+        "max_output_gb"       : MAX_OUTPUT_GB,
+        "session_ttl_hours"   : SESSION_TTL // 3600,
+        "max_epochs"          : MAX_EPOCHS,
+    }
 
 
 @router.post("/session")
