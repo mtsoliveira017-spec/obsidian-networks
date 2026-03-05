@@ -425,29 +425,23 @@ function CompileSection({
   // Clean up poll on unmount
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current) }, [])
 
-  // When the notebook is re-saved (mtime advances):
-  //   - reset error state so compile button reappears
-  //   - auto-trigger compile only if we were in error state (model fixed the script after a failure)
-  const prevMtimeRef    = useRef<number | null>(null)
+  // mtime at the moment we entered 'fixing' — only recompile if mtime advances BEYOND this
+  const fixingMtimeRef  = useRef<number | null>(null)
   const startCompileRef = useRef<(() => Promise<void>) | null>(null)
   const taskIdRef       = useRef<string | null>(null)
   useEffect(() => {
     const mtime = status.notebook_mtime
-    if (
-      mtime !== null &&
-      prevMtimeRef.current !== null &&
-      mtime > prevMtimeRef.current
-    ) {
+    if (mtime !== null && fixingMtimeRef.current !== null && mtime > fixingMtimeRef.current) {
+      // mtime advanced after we entered 'fixing' — model saved a new script, recompile once
+      fixingMtimeRef.current = null
       setCompile(c => {
         if (c.phase === 'fixing') {
-          // Model finished editing — auto-recompile
           setTimeout(() => startCompileRef.current?.(), 0)
           return { phase: 'idle', progress: 0, step: '', error: null }
         }
         return c
       })
     }
-    prevMtimeRef.current = mtime ?? null
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status.notebook_mtime])
 
@@ -500,7 +494,8 @@ function CompileSection({
           pollRef.current = null
           taskIdRef.current = null
           const errMsg = data.error ?? 'Compilation failed'
-          // Transition to 'fixing' so UI shows the AI is working on it silently
+          // Snapshot mtime now — only recompile when mtime advances beyond this point
+          fixingMtimeRef.current = status.notebook_mtime
           setCompile({ phase: 'fixing', progress: 0, step: '', error: errMsg })
           onCompileError(errMsg)
         } else {
@@ -526,6 +521,7 @@ function CompileSection({
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null }
     const tid = taskIdRef.current
     taskIdRef.current = null
+    fixingMtimeRef.current = null
     setCompile({ phase: 'idle', progress: 0, step: '', error: null })
     if (tid) {
       try { await fetch(`/api/platform/revoke/${tid}`, { method: 'POST' }) } catch { /* best-effort */ }
@@ -572,7 +568,7 @@ function CompileSection({
             </div>
             <p className="text-[11px] text-zinc-500 leading-relaxed line-clamp-3">{compile.error}</p>
             <button
-              onClick={() => setCompile({ phase: 'idle', progress: 0, step: '', error: null })}
+              onClick={() => { fixingMtimeRef.current = null; setCompile({ phase: 'idle', progress: 0, step: '', error: null }) }}
               className="cursor-pointer text-[10px] text-zinc-600 underline hover:text-zinc-400"
             >
               Cancel auto-fix
