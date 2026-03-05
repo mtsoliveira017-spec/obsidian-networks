@@ -207,18 +207,39 @@ def analyse_dataset(df: pd.DataFrame) -> dict:
 
 
 @router.post("/upload/{session_id}")
-async def upload_dataset(session_id: str, file: UploadFile = File(...)):
+async def upload_dataset(session_id: str, request: Request):
     """Upload a CSV or JSON dataset. Validates type and size."""
     session = get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found or expired")
 
-    # Extension check
+    # Parse multipart with a high part-size limit (Starlette default is 1 MB)
+    from starlette.formparsers import MultiPartParser
+    from starlette.datastructures import UploadFile as _UF
+    _LARGE = 10 * 1024 * 1024 * 1024  # 10 GB
+    logger.info("Upload request: content-type=%r content-length=%r",
+                request.headers.get("content-type"), request.headers.get("content-length"))
+    try:
+        parser = MultiPartParser(request.headers, request.stream(), max_files=1, max_fields=0, max_part_size=_LARGE)
+        form = await parser.parse()
+    except Exception as e:
+        logger.exception("MultiPartParser failed: %s", e)
+        raise HTTPException(status_code=400, detail=f"Failed to parse upload: {e}")
+    file: _UF | None = form.get("file")  # type: ignore[assignment]
+    if file is None:
+        logger.warning("No 'file' field in form. Keys: %s", list(form.keys()))
+        raise HTTPException(status_code=400, detail="No file field in request")
+
+    # Extension check — fall back to content-type sniffing if filename is missing
     ext = Path(file.filename or "").suffix.lower()
+    if not ext:
+        ct = (file.content_type or "").lower()
+        ext = ".json" if "json" in ct else ".csv"
     if ext not in ALLOWED_EXTENSIONS:
+        logger.warning("Upload rejected: filename=%r ext=%r content_type=%r", file.filename, ext, file.content_type)
         raise HTTPException(status_code=400, detail=f"Only .csv and .json files are accepted (got '{ext}')")
 
-    # Stream to disk with size enforcement
+    # Read file and enforce size limit
     dest_path = session.session_dir / f"dataset{ext}"
     total_size = 0
     chunks: list[bytes] = []
@@ -240,10 +261,17 @@ async def upload_dataset(session_id: str, file: UploadFile = File(...)):
         if mime not in ALLOWED_MIME_TYPES:
             raise HTTPException(status_code=400, detail=f"Invalid file content type: {mime}")
 
-    # Content validation — try to parse
+    # Content validation — try to parse (auto-detect delimiter for CSV)
     try:
         if ext == ".csv":
-            df = pd.read_csv(io.BytesIO(raw_bytes))
+            import csv as _csv
+            sample = raw_bytes[:8192].decode(errors="replace")
+            try:
+                dialect = _csv.Sniffer().sniff(sample, delimiters=",;\t|")
+                sep = dialect.delimiter
+            except _csv.Error:
+                sep = ","
+            df = pd.read_csv(io.BytesIO(raw_bytes), sep=sep)
         else:
             df = pd.read_json(io.BytesIO(raw_bytes))
     except Exception as e:

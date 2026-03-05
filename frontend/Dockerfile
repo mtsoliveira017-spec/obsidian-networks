@@ -20,6 +20,10 @@ ENV NEXT_TELEMETRY_DISABLED=1
 ARG INTERNAL_API_URL=http://api:8000
 ENV INTERNAL_API_URL=${INTERNAL_API_URL}
 
+# NEXT_PUBLIC_UPLOAD_URL is baked into the client bundle at build time
+ARG NEXT_PUBLIC_UPLOAD_URL=http://localhost:8000
+ENV NEXT_PUBLIC_UPLOAD_URL=${NEXT_PUBLIC_UPLOAD_URL}
+
 RUN npm run build
 
 # ── Stage 3: production runtime ───────────────────────────────────────────────

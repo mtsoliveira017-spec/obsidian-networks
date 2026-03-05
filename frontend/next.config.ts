@@ -9,6 +9,12 @@ const nextConfig: NextConfig = {
     root: __dirname,
   },
 
+  experimental: {
+    serverActions: {
+      bodySizeLimit: "600mb",
+    },
+  },
+
   async rewrites() {
     return [
       // Keep Next-Auth routes local
