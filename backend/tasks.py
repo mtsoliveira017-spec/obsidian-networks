@@ -459,6 +459,63 @@ def patch_normalizer_name(code: str) -> str:
     return code
 
 
+_LIVE_DATA_IMPORTS = re.compile(
+    r'^\s*(?:import\s+(?:MetaTrader5|mt5|yfinance|ccxt|alpaca|binance|ib_insync|tvdatafeed|twelvedata)|'
+    r'from\s+(?:MetaTrader5|mt5|yfinance|ccxt|alpaca|binance|ib_insync|tvdatafeed|twelvedata)\b)',
+    re.MULTILINE,
+)
+
+_LIVE_DATA_REPLACEMENT = '''\
+# [obsidian patch] live-data import removed — reading uploaded dataset instead
+df = pd.read_csv("dataset.csv")
+'''
+
+
+def patch_live_data_sources(code: str) -> str:
+    """Replace live market-data API calls with pd.read_csv("dataset.csv").
+
+    Models sometimes generate scripts that fetch live data from MT5, yfinance,
+    ccxt, etc. These APIs are not installed and have no network access in the
+    sandbox. Replace the entire loading block with a read of the uploaded file.
+    """
+    if not _LIVE_DATA_IMPORTS.search(code):
+        return code
+
+    lines = code.splitlines(keepends=True)
+    out: list[str] = []
+    injected = False
+
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+
+        # Remove live-data import lines
+        if _LIVE_DATA_IMPORTS.match(line):
+            i += 1
+            continue
+
+        # Remove mt5.initialize() / mt5.shutdown() / yf.download() / ccxt calls
+        # and any df = mt5.* / df = yf.* assignments
+        if re.match(
+            r'\s*(?:mt5|yf|yfinance|ccxt|MetaTrader5)\s*[.=(]',
+            line,
+        ) or re.match(
+            r'\s*df\s*=\s*(?:mt5|yf|yfinance|ccxt|MetaTrader5)\b',
+            line,
+        ):
+            if not injected:
+                out.append(_LIVE_DATA_REPLACEMENT)
+                injected = True
+            i += 1
+            continue
+
+        out.append(line)
+        i += 1
+
+    return ''.join(out)
+
+
 def patch_dataset_filename(code: str) -> str:
     """Rewrite any pd.read_csv / pd.read_json call whose first string argument
     is not 'dataset.csv' / 'dataset.json' to use the canonical filename.
@@ -867,6 +924,7 @@ def run_compilation_task(self, session_id: str) -> dict:
 
     code = script_path.read_text()
     validate_code(code)
+    code = patch_live_data_sources(code)
     code = patch_dataset_filename(code)
     code = patch_keras_mistakes(code)
     code = patch_load_data_missing_return(code)

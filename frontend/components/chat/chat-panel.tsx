@@ -296,7 +296,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(function Ch
           ...prev,
           { id: cardId, afterMsgId: afterId, filename: fileForUpload.name, preview },
         ])
-        schemaBlock = formatSchema(fileForUpload.name, preview)
+        schemaBlock = formatSchema('dataset.csv', preview)
       }
 
       setIsUploading(false)
@@ -306,7 +306,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(function Ch
       window.dispatchEvent(new Event('dataset-uploaded'))
     }
 
-    const messageText = trimmed || `I've uploaded ${fileForUpload?.name}. Please analyse this dataset and suggest the best ML architecture.`
+    const messageText = trimmed || `I've uploaded a dataset. Please analyse it and suggest the best ML architecture.`
     sendMessage({ text: messageText + schemaBlock })
   }, [pendingFile, sessionId, isLoading, isUploading, messages, sendMessage])
 
