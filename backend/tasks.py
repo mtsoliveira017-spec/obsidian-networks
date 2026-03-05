@@ -509,20 +509,34 @@ df = pd.read_csv("dataset.csv")
 _COL_PRINT_MARKER = "_obsidian_col_print"
 
 def patch_column_names_print(code: str) -> str:
-    """Inject a print(df.columns.tolist()) after the first pd.read_*() call.
+    """Inject a print(<var>.columns.tolist()) after the first pd.read_*() call.
 
     This ensures every run outputs the actual column names at the top of stdout,
     so if the script crashes on a KeyError the error message already contains
     the real column list — making it trivial for the model to fix.
+
+    Skipped for RL scripts — they don't have a top-level DataFrame variable.
     """
     if _COL_PRINT_MARKER in code:
         return code
 
-    # Find insert point: after the first pd.read_csv / pd.read_json / pd.read_parquet etc.
-    pattern = re.compile(r'^(\s*\w+\s*=\s*pd\.read_\w+\s*\()', re.MULTILINE)
+    # Skip RL scripts — injecting df.columns would NameError if the var isn't 'df'
+    _rl_re = re.compile(
+        r'\benv\.step\s*\(|\benv\.reset\s*\(|\bgymnasium\b|\bgym\.Env\b'
+        r'|\bGradientTape\b|\bPPO\b|\bDQN\b|\bSAC\b'
+        r'|class\s+\w+\s*\(\s*(?:gymnasium\.Env|gym\.Env)',
+    )
+    if _rl_re.search(code):
+        return code
+
+    # Find insert point: after the first <varname> = pd.read_*() call
+    # Capture the assigned variable name so we use the right name in the print.
+    pattern = re.compile(r'^(\s*)(\w+)\s*=\s*pd\.read_\w+\s*\(', re.MULTILINE)
     m = pattern.search(code)
     if not m:
         return code
+
+    var_name = m.group(2)  # actual variable name (e.g. 'df', 'df_raw', 'data')
 
     # Walk forward to end of the statement (matching parens)
     pos = m.start()
@@ -536,11 +550,11 @@ def patch_column_names_print(code: str) -> str:
             if depth == 0:
                 nl = code.find('\n', i)
                 insert_pos = nl + 1 if nl != -1 else len(code)
-                indent = re.match(r'^(\s*)', m.group(0)).group(1)
+                indent = m.group(1)
                 snippet = (
                     f"{indent}print(f'[obsidian] columns ({_COL_PRINT_MARKER}):', "
-                    f"list(df.columns))\n"
-                    f"{indent}print(f'[obsidian] shape:', df.shape)\n"
+                    f"list({var_name}.columns))\n"
+                    f"{indent}print(f'[obsidian] shape:', {var_name}.shape)\n"
                 )
                 return code[:insert_pos] + snippet + code[insert_pos:]
         i += 1
