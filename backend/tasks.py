@@ -105,8 +105,20 @@ def patch_categorical_encoding(code: str) -> str:
     Uses the AST to find the exact line number of the read call, then inserts
     the snippet after the complete statement ends. Falls back to a simple regex
     search if AST traversal finds nothing.
+
+    Skipped for RL scripts — they manage their own state and the injection would
+    land inside a class/method body, corrupting indentation.
     """
     if _ALREADY_PATCHED.search(code):
+        return code
+
+    # Skip RL scripts entirely
+    _rl_re = re.compile(
+        r'\benv\.step\s*\(|\benv\.reset\s*\(|\bgymnasium\b|\bgym\.Env\b'
+        r'|\bGradientTape\b|\bPPO\b|\bDQN\b|\bSAC\b'
+        r'|class\s+\w+\s*\(\s*(?:gymnasium\.Env|gym\.Env)',
+    )
+    if _rl_re.search(code):
         return code
 
     lines = code.splitlines(keepends=True)
@@ -249,6 +261,8 @@ def patch_synthetic_data_fallback(code: str) -> str:
 def patch_load_data_missing_return(code: str) -> str:
     """Fix load_data() / load_dataset() functions that read a file but forget to return df.
 
+    Skipped for RL scripts — they use load functions intentionally without top-level returns.
+
     A common weak-model mistake:
         def load_data(path):
             df = pd.read_csv(path)
@@ -259,6 +273,14 @@ def patch_load_data_missing_return(code: str) -> str:
     whose body contains a pd.read_* call assigned to a local name, and whose
     last statement is NOT a Return.  Appends `return <varname>`.
     """
+    _rl_re = re.compile(
+        r'\benv\.step\s*\(|\benv\.reset\s*\(|\bgymnasium\b|\bgym\.Env\b'
+        r'|\bGradientTape\b|\bPPO\b|\bDQN\b|\bSAC\b'
+        r'|class\s+\w+\s*\(\s*(?:gymnasium\.Env|gym\.Env)',
+    )
+    if _rl_re.search(code):
+        return code
+
     try:
         tree = ast.parse(code)
     except SyntaxError:
@@ -313,9 +335,19 @@ def patch_df_none_guard(code: str) -> str:
 
     Catches cases where the LLM wraps pd.read_csv in a helper that forgets to
     return, or uses a file path that silently returns None.
+
+    Skipped for RL scripts — df is loaded inside class/method scope.
     """
     if 'df is None' in code or 'df == None' in code:
         return code  # already guarded (possibly by patch_synthetic_data_fallback)
+
+    _rl_re = re.compile(
+        r'\benv\.step\s*\(|\benv\.reset\s*\(|\bgymnasium\b|\bgym\.Env\b'
+        r'|\bGradientTape\b|\bPPO\b|\bDQN\b|\bSAC\b'
+        r'|class\s+\w+\s*\(\s*(?:gymnasium\.Env|gym\.Env)',
+    )
+    if _rl_re.search(code):
+        return code
 
     try:
         tree = ast.parse(code)
@@ -832,9 +864,11 @@ def patch_canonical_plots(code: str) -> str:
     RL scripts (gymnasium envs, custom training loops) are excluded — they manage
     their own plotting and don't have a Keras History object or model.predict().
     """
-    # Skip RL scripts — they have custom training loops without model.fit()
+    # Skip RL scripts — they have custom training loops without a Keras History object.
     is_rl = bool(re.search(
-        r'\benv\.step\s*\(|\bgymnasium\b|\bGymEnv\b|class\s+\w+\s*\(\s*(?:gymnasium\.Env|gym\.Env)',
+        r'\benv\.step\s*\(|\benv\.reset\s*\(|\bgymnasium\b|\bgym\.Env\b'
+        r'|\bGradientTape\b|\bPPO\b|\bDQN\b|\bSAC\b'
+        r'|class\s+\w+\s*\(\s*(?:gymnasium\.Env|gym\.Env)',
         code,
     ))
     if is_rl:

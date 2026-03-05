@@ -492,7 +492,18 @@ def _validate_script(script: str) -> list[str]:
 
     # ── Detect script type ────────────────────────────────────────────────────
     # RL scripts use custom training loops — different validation rules apply.
-    is_rl = bool(re.search(r'\benv\.step\s*\(|\bgymnasium\b|\bGymEnv\b|class\s+\w+\s*\(\s*(?:gymnasium\.Env|gym\.Env)', script))
+    # Detect broadly: any RL-related keyword is enough to skip the model.fit() check.
+    is_rl = bool(re.search(
+        r'\benv\.step\s*\('           # explicit env.step()
+        r'|\benv\.reset\s*\('         # env.reset()
+        r'|\bgymnasium\b'             # gymnasium import
+        r'|\bgym\.Env\b'              # gym.Env base class
+        r'|\bGradientTape\b'          # custom TF training loop
+        r'|\bactor\b.*\bcritic\b'     # PPO/SAC actor-critic
+        r'|\bPPO\b|\bDQN\b|\bSAC\b'  # algorithm names
+        r'|class\s+\w+\s*\(\s*(?:gymnasium\.Env|gym\.Env)',
+        script,
+    ))
 
     # ── Required structural elements ──────────────────────────────────────────
     if is_rl:
@@ -820,13 +831,20 @@ async def edit_script(session_id: str, payload: dict):
             return {"ok": False, "error": f"old_str matches {count} locations — make it more specific."}
         new_code = code.replace(old_str, new_str, 1)
 
-    try:
-        validate_code(new_code)
-    except ValueError as e:
-        return {"ok": False, "error": f"Edit introduces a security violation: {e}"}
+    # For __REPLACE_ALL__ skip security scan here — the script may have syntax errors
+    # the model still needs to fix; full security + structural validation runs at create_notebook.
+    # For targeted str-replace, run a quick security check only (not structural).
+    if old_str != "__REPLACE_ALL__":
+        try:
+            validate_code(new_code)
+        except SyntaxError as e:
+            return {"ok": False, "error": f"SyntaxError after edit: {e}. Use read_script to review the script, then fix the indentation or syntax."}
+        except ValueError as e:
+            return {"ok": False, "error": f"Security violation: {e}"}
 
     script_path.write_text(new_code)
-    return {"ok": True, "message": "Script updated successfully."}
+    lines = len(new_code.splitlines())
+    return {"ok": True, "message": f"Script updated ({lines} lines). Call create_notebook when ready."}
 
 
 @router.post("/run_code/{session_id}")

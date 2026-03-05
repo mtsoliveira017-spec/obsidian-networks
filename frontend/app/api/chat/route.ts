@@ -296,13 +296,14 @@ function createNotebookTool(sessionId: string | null) {
 
   // Per-request retry counter — resets each time the route is called (i.e. each user turn).
   // Caps at 3 attempts to prevent infinite fix-and-retry loops.
-  let attempts = 0
+  let attempts    = 0
+  let lastError   = ''
   const MAX_ATTEMPTS = 3
 
   return tool({
     description:
       'Validate and save the current script as a downloadable Jupyter notebook (.ipynb). ' +
-      'IMPORTANT: Do NOT pass the script here. Instead, first write the script using ' +
+      'IMPORTANT: Do NOT pass the script here. First write the script using ' +
       'edit_script(old_str="__REPLACE_ALL__", new_str=<full script>), then call create_notebook ' +
       'with only a description. The backend reads the already-saved script automatically. ' +
       'The notebook will appear in the Downloads panel for the user to download.',
@@ -318,11 +319,8 @@ function createNotebookTool(sessionId: string | null) {
 
       if (attempts > MAX_ATTEMPTS) {
         return {
-          error: `HARD STOP — create_notebook has failed ${MAX_ATTEMPTS} times in a row.`,
-          action:
-            'Do NOT call create_notebook again. Instead, tell the user that the script could not ' +
-            'be validated after multiple attempts, apologise, and ask them to describe a simpler ' +
-            'architecture or fewer features so you can start fresh.',
+          error : `HARD STOP — create_notebook has failed ${MAX_ATTEMPTS} times in a row.`,
+          action: 'Do NOT call create_notebook again. Apologise to the user and ask them to describe a simpler architecture so you can start fresh.',
         }
       }
 
@@ -335,16 +333,23 @@ function createNotebookTool(sessionId: string | null) {
         })
         if (!res.ok) {
           const body = await res.json().catch(() => null)
-          // 422 = structured validation errors from the backend — surface them clearly
           if (res.status === 422 && body?.detail?.errors) {
+            const errors      = body.detail.errors as string[]
+            const errorKey    = errors.join('|')
+            const repeated    = errorKey === lastError
+            lastError         = errorKey
             const attemptsLeft = MAX_ATTEMPTS - attempts
-            return {
-              error      : body.detail.message ?? 'Script validation failed.',
-              errors     : (body.detail.errors as string[]),
-              action     : attemptsLeft > 0
-                ? `Fix ALL listed errors and call create_notebook again (${attemptsLeft} attempt(s) remaining).`
-                : 'HARD STOP — no attempts remaining. Tell the user to describe a simpler approach.',
-            }
+            const isSyntax    = errors.some(e => e.startsWith('SyntaxError'))
+
+            // If same error repeated, or it's a syntax error — targeted edits won't help.
+            // Force a full rewrite.
+            const action = attemptsLeft <= 0
+              ? 'HARD STOP — no attempts remaining. Tell the user to describe a simpler approach.'
+              : (repeated || isSyntax)
+                ? `MANDATORY: Use edit_script(old_str="__REPLACE_ALL__", new_str=<complete corrected script>) to rewrite the entire script from scratch. Targeted edits cannot fix this. Then call create_notebook again (${attemptsLeft} attempt(s) remaining).`
+                : `Fix ALL listed errors with edit_script, then call create_notebook again (${attemptsLeft} attempt(s) remaining).`
+
+            return { errors, action }
           }
           const text = body ? JSON.stringify(body) : res.statusText
           return { error: `Backend error ${res.status}: ${text}` }
