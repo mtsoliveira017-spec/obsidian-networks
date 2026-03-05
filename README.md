@@ -351,6 +351,7 @@ All configuration lives in `.env` at the repo root (Docker) or `frontend/.env.lo
 | `SESSION_TTL_HOURS` | `4` | Hours before session files are purged |
 | `MAX_FILE_SIZE_MB` | `500` | Maximum dataset upload size |
 | `SESSIONS_DIR` | `/sessions` | Where session files are stored |
+| `MAX_TRAINING_MINUTES` | `10` | Hard timeout for the training subprocess |
 
 ---
 

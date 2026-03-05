@@ -174,6 +174,170 @@ def patch_categorical_encoding(code: str) -> str:
     return code
 
 
+_DF_NONE_GUARD = '''\
+if df is None:
+    raise RuntimeError(
+        "Dataset failed to load — df is None. "
+        "Check that dataset.csv exists in the working directory and that the "
+        "load function returns a DataFrame."
+    )
+'''
+
+
+def patch_synthetic_data_fallback(code: str) -> str:
+    """Remove synthetic-data fallback blocks that hide real load failures.
+
+    LLMs sometimes generate:
+        if df is None:
+            df = pd.DataFrame(np.random....)   # synthetic fallback
+    or similar try/except blocks that swallow load errors and substitute fake
+    data.  These must be removed so the real error surfaces.
+
+    Strategy: use AST to find If nodes whose test is `df is None` (or
+    `df is None or len(df) == 0` etc.) and whose body contains a DataFrame
+    construction (pd.DataFrame, np.random, range).  Replace those blocks with
+    a hard raise.
+    """
+    # Fast path — most scripts won't have this
+    if 'synthetic' not in code and ('df is None' not in code and 'df == None' not in code):
+        return code
+
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+
+    lines = code.splitlines(keepends=True)
+    # Collect line ranges of synthetic fallback if-blocks to replace
+    replacements: list[tuple[int, int]] = []  # (start_lineno, end_lineno) 1-based inclusive
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.If):
+            continue
+        # Check test involves `df is None` or similar
+        test_src = ast.unparse(node.test)
+        if 'df' not in test_src or ('None' not in test_src and 'empty' not in test_src and 'len' not in test_src):
+            continue
+        # Check body contains synthetic data construction
+        body_src = '\n'.join(ast.unparse(n) for n in node.body)
+        if not any(kw in body_src for kw in ('DataFrame', 'random', 'synthetic', 'np.zeros', 'np.ones', 'range(')):
+            continue
+        start = node.lineno
+        end   = getattr(node, 'end_lineno', node.lineno)
+        replacements.append((start, end))
+
+    if not replacements:
+        return code
+
+    # Replace each block (process in reverse so line numbers stay valid)
+    for start, end in sorted(replacements, reverse=True):
+        replacement = (
+            'if df is None:\n'
+            '    raise RuntimeError(\n'
+            '        "Dataset failed to load — refusing to substitute synthetic data. "\n'
+            '        "Ensure dataset.csv is present and the load function returns a DataFrame."\n'
+            '    )\n'
+        )
+        lines[start - 1 : end] = [replacement]
+
+    return ''.join(lines)
+
+
+def patch_load_data_missing_return(code: str) -> str:
+    """Fix load_data() / load_dataset() functions that read a file but forget to return df.
+
+    A common weak-model mistake:
+        def load_data(path):
+            df = pd.read_csv(path)
+            df = df.dropna()
+            # no return!
+
+    Uses AST: finds FunctionDef nodes whose name contains 'load' or 'data',
+    whose body contains a pd.read_* call assigned to a local name, and whose
+    last statement is NOT a Return.  Appends `return <varname>`.
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+
+    lines = code.splitlines(keepends=True)
+    inserts: list[tuple[int, str]] = []  # (after_lineno, text)
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        name = node.name.lower()
+        if not any(k in name for k in ('load', 'data', 'read', 'fetch')):
+            continue
+
+        # Find a local var assigned from pd.read_*
+        read_var: str | None = None
+        for stmt in ast.walk(node):
+            if not isinstance(stmt, ast.Assign):
+                continue
+            if not (len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)):
+                continue
+            val = stmt.value
+            if (isinstance(val, ast.Call)
+                    and isinstance(val.func, ast.Attribute)
+                    and val.func.attr.startswith('read_')
+                    and isinstance(val.func.value, ast.Name)
+                    and val.func.value.id == 'pd'):
+                read_var = stmt.targets[0].id
+
+        if read_var is None:
+            continue
+
+        # Check last statement of function body is not a Return
+        last = node.body[-1]
+        if isinstance(last, ast.Return):
+            continue
+
+        indent = '    '  # function body indentation
+        after_line = getattr(last, 'end_lineno', last.lineno)
+        inserts.append((after_line, f'{indent}return {read_var}\n'))
+
+    # Apply in reverse order
+    for after_line, text in sorted(inserts, key=lambda x: x[0], reverse=True):
+        lines.insert(after_line, text)
+
+    return ''.join(lines)
+
+
+def patch_df_none_guard(code: str) -> str:
+    """Inject a None-check after the first `df = ...` assignment.
+
+    Catches cases where the LLM wraps pd.read_csv in a helper that forgets to
+    return, or uses a file path that silently returns None.
+    """
+    if 'df is None' in code or 'df == None' in code:
+        return code  # already guarded (possibly by patch_synthetic_data_fallback)
+
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+
+    insert_after_line: int | None = None
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        if not (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)):
+            continue
+        if node.targets[0].id != 'df':
+            continue
+        insert_after_line = getattr(node, 'end_lineno', None) or node.lineno
+        break  # first assignment only
+
+    if insert_after_line is None:
+        return code
+
+    lines = code.splitlines(keepends=True)
+    idx = insert_after_line  # 1-based → slice index after that line
+    return ''.join(lines[:idx]) + _DF_NONE_GUARD + ''.join(lines[idx:])
+
+
 # ── Safe Concatenate guard ─────────────────────────────────────────────────────
 #
 # Replaces any `layers.Concatenate(...)(some_list)` call where the list variable
@@ -292,6 +456,35 @@ def patch_normalizer_name(code: str) -> str:
     # assigned name is ground truth (it's what was actually created).
     # Rename all uses of the wrong adapt-caller to match.
     code = re.sub(rf'\b{re.escape(adapt_name)}\b', assigned, code)
+    return code
+
+
+def patch_dataset_filename(code: str) -> str:
+    """Rewrite any pd.read_csv / pd.read_json call whose first string argument
+    is not 'dataset.csv' / 'dataset.json' to use the canonical filename.
+
+    The upload handler saves every file as dataset.{ext} regardless of the
+    original name, but weak models copy the original filename from the chat
+    context (e.g. 'ohlcv_data.csv', 'heart_failure_dataset.csv').
+    """
+    # Rewrite pd.read_csv("anything.csv") → pd.read_csv("dataset.csv")
+    code = re.sub(
+        r'''(pd\.read_csv\s*\(\s*)(['"])(?!dataset\.csv\b)[^'"]+\.csv\2''',
+        r'''\g<1>\g<2>dataset.csv\g<2>''',
+        code,
+    )
+    # Rewrite pd.read_json("anything.json") → pd.read_json("dataset.json")
+    code = re.sub(
+        r'''(pd\.read_json\s*\(\s*)(['"])(?!dataset\.json\b)[^'"]+\.json\2''',
+        r'''\g<1>\g<2>dataset.json\g<2>''',
+        code,
+    )
+    # Also fix bare DATA_PATH / FILE_PATH / CSV_PATH string assignments
+    code = re.sub(
+        r'''((?:DATA_PATH|FILE_PATH|CSV_PATH|data_path|file_path|csv_path)\s*=\s*)(['"])(?!dataset\.)[^'"]+\.(csv|json)\2''',
+        lambda m: f'{m.group(1)}{m.group(2)}dataset.{m.group(3)}{m.group(2)}',
+        code,
+    )
     return code
 
 
@@ -537,8 +730,9 @@ def patch_tf_float_cast(code: str) -> str:
 
     # Patch bare rl_var used in arithmetic with a tf tensor: `ratio * adv_batch`
     # → `ratio * _obsidian_f32(adv_batch)` and similar for +, -, /
+    # (?!=) ensures we don't match augmented assignments (+=, -=, *=, /=)
     code = re.sub(
-        r'(?<!\w)(' + _RL_VARS + r')(?=\s*[\*\+\-\/])',
+        r'(?<!\w)(' + _RL_VARS + r')(?=\s*[\*\+\-\/](?!=))',
         r'_obsidian_f32(\1)',
         code,
     )
@@ -673,8 +867,12 @@ def run_compilation_task(self, session_id: str) -> dict:
 
     code = script_path.read_text()
     validate_code(code)
+    code = patch_dataset_filename(code)
     code = patch_keras_mistakes(code)
+    code = patch_load_data_missing_return(code)
+    code = patch_synthetic_data_fallback(code)
     code = patch_categorical_encoding(code)
+    code = patch_df_none_guard(code)
     code = patch_safe_concatenate(code)
     code = patch_normalizer_name(code)
     code = patch_tf_float_cast(code)

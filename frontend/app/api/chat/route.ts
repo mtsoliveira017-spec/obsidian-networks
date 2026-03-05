@@ -180,12 +180,17 @@ const researchTools = {
       if (!isAllowedUrl(input.url)) {
         return { error: `Domain not allowed. Permitted: ${ALLOWED_DOMAINS.join(', ')}` }
       }
+      // arXiv abstract pages contain only the abstract — rewrite to HTML full-text
+      const url = input.url.replace(
+        /^(https?:\/\/arxiv\.org\/)abs\//,
+        '$1html/'
+      )
       try {
-        const html    = await fetchText(input.url)
-        const content = wordTruncate(htmlToText(html), 6000)
-        return { url: input.url, content }
+        const html    = await fetchText(url)
+        const content = wordTruncate(htmlToText(html), 12000)
+        return { url, content }
       } catch (err) {
-        return { url: input.url, error: String(err) }
+        return { url, error: String(err) }
       }
     },
   }),
@@ -285,7 +290,7 @@ CRITICAL — follow this decision tree on EVERY user message:
    → STEP 1 (MANDATORY): Call fetch_arxiv_papers with a query matching their domain — e.g. "tabular regression deep learning 2024". Read ALL returned papers, not just the first one.
    → STEP 2 (MANDATORY): Call fetch_arxiv_papers AGAIN with a second, different query to broaden coverage — e.g. "neural network architecture benchmark tabular data 2024". Compare findings across both calls.
    → STEP 3 (MANDATORY): Call search_tensorflow_docs to verify the Keras 3 API for the top architecture identified from the literature.
-   → STEP 4 (MANDATORY): If the literature references a specific technique you are not certain about (e.g. residual connections, attention, feature tokenisation), call fetch_url on the most relevant paper or doc page to read it in full before writing code.
+   → STEP 4 (MANDATORY): Call fetch_url on the single most relevant paper URL from steps 1–2 to read its full text (methods, architecture, hyperparameters). This is the primary source for your implementation — always do this, not just when uncertain.
    → Only AFTER all research tool calls are complete, proceed:
    → STEP 5: Analyse the schema: task type, target column, class balance, preprocessing needs
    → STEP 6: Write the complete script and pass it DIRECTLY to create_notebook — do NOT print or show the script in your chat reply
