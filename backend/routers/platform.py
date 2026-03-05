@@ -784,7 +784,8 @@ async def edit_script(session_id: str, payload: dict):
     """Replace an exact string in the current script (like a str-replace editor).
 
     Payload: { "old_str": "...", "new_str": "..." }
-    Fails if old_str is not found or matches more than once.
+    Special case: if old_str is "__REPLACE_ALL__", new_str replaces the entire script.
+    Fails if old_str is not found or matches more than once (unless __REPLACE_ALL__).
     """
     session = get_session(session_id)
     if not session:
@@ -798,14 +799,17 @@ async def edit_script(session_id: str, payload: dict):
     if not old_str:
         raise HTTPException(status_code=400, detail="old_str cannot be empty")
 
-    code = script_path.read_text()
-    count = code.count(old_str)
-    if count == 0:
-        return {"ok": False, "error": "old_str not found in script. Check the exact text including whitespace."}
-    if count > 1:
-        return {"ok": False, "error": f"old_str matches {count} locations — make it more specific."}
+    if old_str == "__REPLACE_ALL__":
+        new_code = new_str
+    else:
+        code = script_path.read_text()
+        count = code.count(old_str)
+        if count == 0:
+            return {"ok": False, "error": "old_str not found in script. Check the exact text including whitespace."}
+        if count > 1:
+            return {"ok": False, "error": f"old_str matches {count} locations — make it more specific."}
+        new_code = code.replace(old_str, new_str, 1)
 
-    new_code = code.replace(old_str, new_str, 1)
     try:
         validate_code(new_code)
     except ValueError as e:
