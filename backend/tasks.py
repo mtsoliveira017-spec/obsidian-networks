@@ -506,6 +506,47 @@ df = pd.read_csv("dataset.csv")
 '''
 
 
+_COL_PRINT_MARKER = "_obsidian_col_print"
+
+def patch_column_names_print(code: str) -> str:
+    """Inject a print(df.columns.tolist()) after the first pd.read_*() call.
+
+    This ensures every run outputs the actual column names at the top of stdout,
+    so if the script crashes on a KeyError the error message already contains
+    the real column list — making it trivial for the model to fix.
+    """
+    if _COL_PRINT_MARKER in code:
+        return code
+
+    # Find insert point: after the first pd.read_csv / pd.read_json / pd.read_parquet etc.
+    pattern = re.compile(r'^(\s*\w+\s*=\s*pd\.read_\w+\s*\()', re.MULTILINE)
+    m = pattern.search(code)
+    if not m:
+        return code
+
+    # Walk forward to end of the statement (matching parens)
+    pos = m.start()
+    depth = 0
+    i = pos
+    while i < len(code):
+        if code[i] == '(':
+            depth += 1
+        elif code[i] == ')':
+            depth -= 1
+            if depth == 0:
+                nl = code.find('\n', i)
+                insert_pos = nl + 1 if nl != -1 else len(code)
+                indent = re.match(r'^(\s*)', m.group(0)).group(1)
+                snippet = (
+                    f"{indent}print(f'[obsidian] columns ({_COL_PRINT_MARKER}):', "
+                    f"list(df.columns))\n"
+                    f"{indent}print(f'[obsidian] shape:', df.shape)\n"
+                )
+                return code[:insert_pos] + snippet + code[insert_pos:]
+        i += 1
+    return code
+
+
 def patch_live_data_sources(code: str) -> str:
     """Replace live market-data API calls with pd.read_csv("dataset.csv").
 
@@ -979,6 +1020,7 @@ def run_compilation_task(self, session_id: str) -> dict:
     validate_code(code)
     code = patch_live_data_sources(code)
     code = patch_dataset_filename(code)
+    code = patch_column_names_print(code)
     code = patch_keras_mistakes(code)
     code = patch_load_data_missing_return(code)
     code = patch_synthetic_data_fallback(code)
@@ -1117,7 +1159,12 @@ def run_compilation_task(self, session_id: str) -> dict:
                 "epochs_max"  : total_epochs,
                 "warning"     : ("\n".join(stdout_lines))[-1000:],
             }
-        error_msg = "\n".join(stdout_lines[-50:]) or "Unknown error"
+        # Always include the column-names line (injected near the top) so the model
+        # knows the actual column names when it sees a KeyError.
+        col_lines = [l for l in stdout_lines if '_obsidian_col_print' in l or '[obsidian]' in l]
+        tail_lines = stdout_lines[-50:]
+        combined = col_lines + ([] if col_lines and col_lines[-1] in tail_lines else tail_lines)
+        error_msg = "\n".join(dict.fromkeys(combined)) or "Unknown error"
         raise RuntimeError(f"Script failed:\n{error_msg}")
 
     if not keras_files:
