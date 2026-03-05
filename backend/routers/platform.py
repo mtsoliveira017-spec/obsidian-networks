@@ -799,8 +799,6 @@ async def edit_script(session_id: str, payload: dict):
     if not session:
         raise HTTPException(status_code=404, detail="Session not found or expired")
     script_path = session.session_dir / "generated_script.py"
-    if not script_path.exists():
-        raise HTTPException(status_code=404, detail="No script found for this session")
 
     old_str = payload.get("old_str", "")
     new_str = payload.get("new_str", "")
@@ -808,8 +806,12 @@ async def edit_script(session_id: str, payload: dict):
         raise HTTPException(status_code=400, detail="old_str cannot be empty")
 
     if old_str == "__REPLACE_ALL__":
+        # __REPLACE_ALL__ creates the file if it doesn't exist yet — this is the
+        # primary way the agent writes a brand-new script before calling create_notebook.
         new_code = new_str
     else:
+        if not script_path.exists():
+            raise HTTPException(status_code=404, detail="No script found for this session. Use old_str='__REPLACE_ALL__' to create the script first.")
         code = script_path.read_text()
         count = code.count(old_str)
         if count == 0:

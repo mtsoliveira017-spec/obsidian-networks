@@ -265,11 +265,11 @@ No external services required beyond your LLM API key.
 
 **How it works:**
 
-1. The Next.js frontend proxies all `/api/platform/*` requests to the FastAPI backend via `next.config.ts` rewrites
-2. The AI chat route (`app/api/chat/route.ts`) calls `streamText` with three research tools and a `create_notebook` tool
-3. When `create_notebook` is called, the backend saves the script as both a `.ipynb` notebook and a `generated_script.py` for the worker
-4. The Celery worker validates the script at the AST level, runs it in a subprocess with a stripped environment, and writes `.keras` files and plot images to the session's output directory
-5. Training progress and per-epoch metrics stream back to the frontend via Server-Sent Events; completed model files and plots appear in the Downloads panel
+1. The Next.js frontend proxies all `/api/platform/*` requests to the FastAPI backend via `next.config.ts` rewrites. Large file uploads bypass the proxy entirely, going directly to the backend at `NEXT_PUBLIC_UPLOAD_URL` to avoid buffering limits.
+2. The AI chat route (`app/api/chat/route.ts`) calls `streamText` with research tools (`fetch_arxiv_papers`, `search_tensorflow_docs`, `fetch_url`), script development tools (`run_code`, `read_script`, `edit_script`), and `create_notebook`.
+3. The agent writes the training script via `edit_script(old_str="__REPLACE_ALL__", ...)`, then calls `create_notebook` with only a description. The backend reads the saved script, applies AST/regex patches, validates it, and wraps it in a `.ipynb` notebook.
+4. The Celery worker validates the script at the AST level, runs it in a subprocess with a stripped environment, and writes `.keras` files and plot images to the session's output directory.
+5. Training progress and per-epoch metrics stream back to the frontend via Server-Sent Events; completed model files and plots appear in the Downloads panel.
 
 ---
 
@@ -336,22 +336,26 @@ All configuration lives in `.env` at the repo root (Docker) or `frontend/.env.lo
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AUTH_SECRET` | — | **Required.** Random string for NextAuth JWT signing (`openssl rand -base64 32`) |
 | `AI_PROVIDER` | `anthropic` | LLM provider: `anthropic`, `openai`, or `lmstudio` |
 | `AI_MODEL` | provider default | Override the model (e.g. `claude-opus-4-6`, `gpt-4o`) |
 | `ANTHROPIC_API_KEY` | — | Required when `AI_PROVIDER=anthropic` |
 | `OPENAI_API_KEY` | — | Required when `AI_PROVIDER=openai` |
 | `LMSTUDIO_BASE_URL` | `http://localhost:1234/v1` | Required when `AI_PROVIDER=lmstudio` |
 
-#### Backend (`backend/.env`)
+#### Backend / Root (`.env`)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `AUTH_SECRET` | — | **Required.** Random string for session signing (`openssl rand -base64 32`) |
 | `REDIS_URL` | `redis://redis:6379/0` | Redis connection URL |
 | `SESSION_TTL_HOURS` | `4` | Hours before session files are purged |
-| `MAX_FILE_SIZE_MB` | `500` | Maximum dataset upload size |
+| `MAX_FILE_SIZE_MB` | `500` | Maximum dataset upload size in MB |
 | `SESSIONS_DIR` | `/sessions` | Where session files are stored |
 | `MAX_TRAINING_MINUTES` | `10` | Hard timeout for the training subprocess |
+| `MAX_MEMORY_GB` | `12` | Docker memory cap for the worker container |
+| `MAX_OUTPUT_GB` | `10` | Max disk output per training run (`RLIMIT_FSIZE`) |
+| `MAX_EPOCHS` | `200` | Maximum epochs the generated script may train for |
+| `NEXT_PUBLIC_UPLOAD_URL` | `http://localhost:8000` | Direct browser→backend URL for large uploads (bypasses Next.js proxy). Set to your host's public backend address in production. |
 
 ---
 
@@ -446,6 +450,16 @@ Each session's files are isolated in a per-session directory that no other sessi
 
 ## Recent Updates
 
+### v0.6.0 — Reinforcement Learning + Large Uploads + Script Reliability
+- **RL support**: Full PPO, DQN, and SAC generation with custom Gymnasium environments. Separate validator rules for RL scripts (no `model.fit()` required; saves `actor.keras`/`critic.keras`/`qnetwork.keras`). `patch_canonical_plots` skips RL scripts to avoid crashes on custom training loops.
+- **Large file uploads**: Uploads up to 500 MB now go directly from the browser to the backend (`NEXT_PUBLIC_UPLOAD_URL`), bypassing Next.js proxy buffering. Starlette multipart parser raised to 10 GB part limit via manual `MultiPartParser` instantiation.
+- **CSV delimiter auto-detection**: `csv.Sniffer` detects comma, semicolon, tab, and pipe delimiters automatically on upload.
+- **Script write/validate flow**: The agent now writes scripts via `edit_script(old_str="__REPLACE_ALL__")` before calling `create_notebook` with only a description. This eliminates JSON serialisation corruption of large Python scripts passed through tool arguments.
+- **Script always saved on validation failure**: `generated_script.py` is written before validation so `read_script` and `edit_script` are always available after a failed `create_notebook`, breaking the rewrite loop.
+- **`edit_script` accepts `__REPLACE_ALL__`**: Lets the agent replace the entire script in one call when facing widespread syntax or indentation errors.
+- **arXiv full-paper reading**: `fetch_url` rewrites `arxiv.org/abs/` → `arxiv.org/html/` to fetch full paper text instead of abstract-only pages, with fallback for papers without HTML rendering.
+- **`run_code` tool**: Agent can now execute Python snippets in the session directory to inspect data, verify column names/shapes, and test logic before writing the full script.
+
 ### v0.5.0 — Context Efficiency
 - **Anthropic**: system prompt cached via `cache_control: ephemeral` — reduces cost and latency on every request
 - **Anthropic**: server-side `contextManagement` automatically clears old tool-use results (arXiv/TF doc fetches) when context exceeds 60k tokens, keeping the last 3 tool turns
@@ -482,6 +496,8 @@ Each session's files are isolated in a per-session directory that no other sessi
 - [ ] Model comparison — compile multiple architectures and compare results side-by-side
 - [x] Docker-isolated compilation sandbox (seccomp profile, capability restrictions, resource limits)
 - [x] Plot gallery — view matplotlib/seaborn figures inline after compilation
+- [x] Reinforcement learning support (PPO, DQN, SAC with Gymnasium environments)
+- [x] Large file uploads up to 500 MB (direct browser→backend, bypasses Next.js proxy)
 - [ ] Export to ONNX / TensorFlow Lite for edge deployment
 
 ---
