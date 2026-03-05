@@ -226,7 +226,7 @@ function DownloadsSection({
 }
 
 interface CompileState {
-  phase   : 'idle' | 'running' | 'error'
+  phase   : 'idle' | 'running' | 'fixing' | 'error'
   progress: number
   step    : string
   error   : string | null
@@ -439,8 +439,8 @@ function CompileSection({
       mtime > prevMtimeRef.current
     ) {
       setCompile(c => {
-        if (c.phase === 'error') {
-          // Auto-recompile after the model fixed a failing script
+        if (c.phase === 'fixing') {
+          // Model finished editing — auto-recompile
           setTimeout(() => startCompileRef.current?.(), 0)
           return { phase: 'idle', progress: 0, step: '', error: null }
         }
@@ -451,9 +451,22 @@ function CompileSection({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status.notebook_mtime])
 
+  // If stuck in 'fixing' for too long (model gave up), fall back to 'error' so user can act
+  const fixingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    if (compile.phase === 'fixing') {
+      fixingTimeoutRef.current = setTimeout(() => {
+        setCompile(c => c.phase === 'fixing' ? { ...c, phase: 'error' } : c)
+      }, 3 * 60 * 1000)
+    } else {
+      if (fixingTimeoutRef.current) { clearTimeout(fixingTimeoutRef.current); fixingTimeoutRef.current = null }
+    }
+    return () => { if (fixingTimeoutRef.current) clearTimeout(fixingTimeoutRef.current) }
+  }, [compile.phase])
+
   // Hide if: no notebook yet, OR (model exists AND task is not actively running/errored)
   if (!status.notebook) return null
-  if ((status.models.length > 0 || status.datasets.length > 0) && compile.phase === 'idle') return null
+  if ((status.models.length > 0 || status.datasets.length > 0) && (compile.phase === 'idle' || compile.phase === 'error')) return null
 
   const startCompile = async () => {
     setCompile({ phase: 'running', progress: 0, step: 'Queuing…', error: null })
@@ -487,7 +500,8 @@ function CompileSection({
           pollRef.current = null
           taskIdRef.current = null
           const errMsg = data.error ?? 'Compilation failed'
-          setCompile({ phase: 'error', progress: 0, step: '', error: errMsg })
+          // Transition to 'fixing' so UI shows the AI is working on it silently
+          setCompile({ phase: 'fixing', progress: 0, step: '', error: errMsg })
           onCompileError(errMsg)
         } else {
           setCompile(prev => ({
@@ -546,6 +560,22 @@ function CompileSection({
             >
               <XCircle className="h-3.5 w-3.5" />
               Stop
+            </button>
+          </div>
+        )}
+
+        {compile.phase === 'fixing' && (
+          <div className="rounded-lg border border-amber-900/40 bg-amber-950/20 p-3 space-y-2">
+            <div className="flex items-center gap-2">
+              <Loader2 className="h-3.5 w-3.5 shrink-0 text-amber-400 animate-spin" />
+              <p className="text-xs font-medium text-amber-300">Script failed — AI is fixing it…</p>
+            </div>
+            <p className="text-[11px] text-zinc-500 leading-relaxed line-clamp-3">{compile.error}</p>
+            <button
+              onClick={() => setCompile({ phase: 'idle', progress: 0, step: '', error: null })}
+              className="cursor-pointer text-[10px] text-zinc-600 underline hover:text-zinc-400"
+            >
+              Cancel auto-fix
             </button>
           </div>
         )}
