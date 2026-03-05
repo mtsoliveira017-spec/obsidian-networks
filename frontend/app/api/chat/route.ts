@@ -480,9 +480,9 @@ For reinforcement learning tasks (when the user describes an agent, environment,
 - Call fetch_arxiv_papers with an RL-specific query BEFORE writing any architecture (e.g. "PPO actor critic custom environment 2024")
 - Call search_tensorflow_docs to verify Keras custom training loop API
 - Choose the algorithm from the user's description: PPO for continuous or complex action spaces, DQN for simple discrete actions, SAC for off-policy continuous control
-- PPO / SAC: generate a separate actor network and critic network, saved as actor.save("actor.keras") and critic.save("critic.keras")
-- DQN: single network saved as qnetwork.save("qnetwork.keras")
-- All model files must be saved to the current working directory (the script runs with cwd = output/)
+- PPO / SAC: generate a separate actor network and critic network, saved as actor.save("output/actor.keras") and critic.save("output/critic.keras")
+- DQN: single network saved as qnetwork.save("output/qnetwork.keras")
+- All model files MUST be saved under the output/ directory — e.g. model.save("output/actor.keras")
 - Wrap any uploaded data in a custom gymnasium.Env subclass inside the script
 - The training loop uses env.step() / env.reset() and trajectory collection — do NOT use model.fit()
 - Add gymnasium to the script's imports

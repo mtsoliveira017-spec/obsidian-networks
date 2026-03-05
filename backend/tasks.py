@@ -828,7 +828,18 @@ def patch_canonical_plots(code: str) -> str:
       - <metric>_curve.png        (always, first non-loss metric)
       - confusion_matrix.png      (classification only)
       - predictions.png           (regression only — scatter + residual histogram)
+
+    RL scripts (gymnasium envs, custom training loops) are excluded — they manage
+    their own plotting and don't have a Keras History object or model.predict().
     """
+    # Skip RL scripts — they have custom training loops without model.fit()
+    is_rl = bool(re.search(
+        r'\benv\.step\s*\(|\bgymnasium\b|\bGymEnv\b|class\s+\w+\s*\(\s*(?:gymnasium\.Env|gym\.Env)',
+        code,
+    ))
+    if is_rl:
+        return code
+
     # Detect task type from loss function name
     task_type = "regression"
     for loss_name in _CLASSIFICATION_LOSSES:

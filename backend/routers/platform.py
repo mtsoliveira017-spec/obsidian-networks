@@ -490,12 +490,30 @@ def _validate_script(script: str) -> list[str]:
         errors.append(f"Security violation: {e}")
         return errors
 
+    # ── Detect script type ────────────────────────────────────────────────────
+    # RL scripts use custom training loops — different validation rules apply.
+    is_rl = bool(re.search(r'\benv\.step\s*\(|\bgymnasium\b|\bGymEnv\b|class\s+\w+\s*\(\s*(?:gymnasium\.Env|gym\.Env)', script))
+
     # ── Required structural elements ──────────────────────────────────────────
-    if "model.fit(" not in script and "model.train" not in script and "env.step(" not in script:
-        errors.append("Script does not call model.fit() — training loop is missing.")
+    if is_rl:
+        # RL: must have some kind of training loop (for/while loop calling step or update)
+        if not re.search(r'\bfor\b|\bwhile\b', script):
+            errors.append("RL script has no training loop (for/while).")
+    else:
+        if "model.fit(" not in script and "model.train" not in script:
+            errors.append("Script does not call model.fit() — training loop is missing.")
 
     if not re.search(r'\.save\s*\(', script):
-        errors.append("Script does not call model.save() — no model will be produced.")
+        errors.append("Script does not call .save() — no model will be produced.")
+    else:
+        # Check if any .save() path is bare (no directory separator)
+        for m in re.finditer(r'\.save\s*\(["\']([^"\']+\.(?:keras|h5))["\']', script):
+            path = m.group(1)
+            if "/" not in path and "\\" not in path:
+                errors.append(
+                    f".save('{path}') is missing the output/ directory prefix. "
+                    f"Use .save('output/{path}') instead."
+                )
 
     if "dataset.csv" not in script and "dataset.json" not in script:
         errors.append(
@@ -503,22 +521,14 @@ def _validate_script(script: str) -> list[str]:
             "Use DATA_PATH = 'dataset.csv' — do not use the original uploaded filename."
         )
 
-    if re.search(r'\.save\s*\(["\'][^"\']*\.(?:keras|h5)["\']', script):
-        # Check if any save path is bare (no directory separator)
-        for m in re.finditer(r'\.save\s*\(["\']([^"\']+\.(?:keras|h5))["\']', script):
-            path = m.group(1)
-            if "/" not in path and "\\" not in path:
-                errors.append(
-                    f"model.save('{path}') is missing the output/ directory prefix. "
-                    f"Use model.save('output/{path}') instead."
-                )
-
-    if "normalizer.adapt(" not in script and "norm.adapt(" not in script and \
-       re.search(r'Normalization\s*\(', script):
-        errors.append(
-            "A Normalization layer is defined but .adapt() is never called. "
-            "Call normalizer.adapt(X_train) before building the model."
-        )
+    # Normalization layer check: only flag for supervised (non-RL) scripts,
+    # and only when a keras Normalization layer is actually constructed.
+    if not is_rl and re.search(r'keras\.layers\.Normalization\s*\(|layers\.Normalization\s*\(', script):
+        if not re.search(r'\w+\.adapt\s*\(', script):
+            errors.append(
+                "A Normalization layer is defined but .adapt() is never called. "
+                "Call normalizer.adapt(X_train) before building the model."
+            )
 
     return errors
 
