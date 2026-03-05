@@ -265,9 +265,11 @@ function createScriptTools(sessionId: string | null) {
     description:
       'Replace an exact string in the current script — like a str-replace editor. ' +
       'Use this to fix specific errors after read_script + run_code identify the problem. ' +
-      'old_str must match exactly once including whitespace and indentation.',
+      'old_str must match exactly once including whitespace and indentation. ' +
+      'Special: set old_str to "__REPLACE_ALL__" to replace the entire script with new_str ' +
+      '(use this when there are multiple errors or an indentation/syntax error that is hard to target precisely).',
     inputSchema: z.object({
-      old_str: z.string().describe('Exact text to replace (must be unique in the script)'),
+      old_str: z.string().describe('Exact text to replace (must be unique), or "__REPLACE_ALL__" to replace the entire script'),
       new_str: z.string().describe('Replacement text'),
     }),
     execute: async (input: { old_str: string; new_str: string }) => {
@@ -395,7 +397,7 @@ CRITICAL — follow this decision tree on EVERY user message:
    → STEP 6: Use run_code to verify the dataset loads correctly and inspect columns/shapes:
        run_code("import pandas as pd; df = pd.read_csv('dataset.csv'); print(df.shape); print(df.dtypes); print(df.head(2))")
    → STEP 7: Write the complete script and pass it DIRECTLY to create_notebook — do NOT print or show the script in your chat reply
-   → STEP 8: If create_notebook returns validation errors, use read_script to read the script, then edit_script to fix the specific error. Call create_notebook again. Repeat until it succeeds. Do NOT rewrite from scratch.
+   → STEP 8: If create_notebook returns validation errors, use read_script to read the script, then edit_script to fix the specific error. For a SyntaxError or widespread indentation issue, use edit_script with old_str="__REPLACE_ALL__" and new_str=<corrected full script>. Call create_notebook again. Repeat until it succeeds.
    → STEP 9: After create_notebook succeeds, write a SHORT chat reply (3–6 bullet points max) summarising: architecture chosen, why (citing specific papers), key hyperparameters, and what the user should expect. No code in the reply.
 
 3. USER ASKS TO CHANGE/IMPROVE THE MODEL?
