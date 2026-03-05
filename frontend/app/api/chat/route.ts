@@ -441,6 +441,7 @@ NEVER narrate your reasoning, instructions, or decision process in your reply �
 <constraints>
 - The dataset is ALWAYS available as "dataset.csv" (or "dataset.json" for JSON uploads) in the working directory — use this exact filename for DATA_PATH. NEVER use the original uploaded filename.
 - All model output files (.keras, .h5) MUST be saved inside the "output/" subdirectory — e.g. model.save("output/model.keras")
+- If your script creates a derived/preprocessed dataset that a later step must read back, save it to "output/filename.csv" and read it back as pd.read_csv("output/filename.csv"). NEVER use a bare filename like pd.read_csv("training_data.csv") for derived files — the platform will rewrite bare filenames to "dataset.csv".
 - DO NOT write any matplotlib/seaborn plot code or plt.savefig calls — the platform automatically generates a canonical set of diagnostic plots (loss curve, metric curve, confusion matrix or predictions scatter) after training. Adding your own plot code will be stripped and may cause errors.
 - Always start scripts with "import tensorflow" and access Keras as tensorflow.keras — e.g. tensorflow.keras.Input(), tensorflow.keras.layers.Dense(). NEVER use standalone "import keras" or bare "keras.X" references.
 - Use the Functional API for all models — no Sequential for anything non-trivial
