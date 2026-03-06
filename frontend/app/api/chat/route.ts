@@ -1,7 +1,6 @@
 import { streamText, convertToModelMessages, pruneMessages, tool, stepCountIs, wrapLanguageModel, extractReasoningMiddleware, type UIMessage } from 'ai'
 import { z } from 'zod'
 import { getModel, getProvider } from '@/lib/model'
-import { PDFParse } from 'pdf-parse'
 
 export const runtime = 'nodejs'
 export const maxDuration = 120
@@ -31,8 +30,11 @@ async function fetchPdfText(url: string): Promise<string | null> {
     })
     if (!res.ok) return null
     const buf = Buffer.from(await res.arrayBuffer())
-    const parser = new PDFParse({ data: buf })
-    const result = await parser.getText()
+    // Import the inner module directly — pdf-parse/index.js runs a self-test on
+    // load that requires a fixture file, which crashes in Next.js builds.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const pdfParse: (buf: Buffer) => Promise<{ text: string }> = require('pdf-parse/lib/pdf-parse.js')
+    const result = await pdfParse(buf)
     return result.text ?? null
   } catch {
     return null
