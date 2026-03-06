@@ -693,7 +693,7 @@ async def _kill_all_work():
     """Signal the worker to kill its subprocess and flush the Celery queue."""
     import redis as _redis
     r = _redis.from_url(celery_app.conf.broker_url)
-    # 1. Set stop flag — worker checks this every stdout line and kills its subprocess
+    # 1. Set stop flag — worker background thread polls this and kills subprocess
     try:
         r.set("worker:stop", "1", ex=30)
     except Exception:
@@ -701,6 +701,13 @@ async def _kill_all_work():
     # 2. Flush the Celery queue so no queued tasks run next
     try:
         r.delete("celery")
+    except Exception:
+        pass
+    # 3. Flush unacked — tasks the worker picked up but hasn't acknowledged yet.
+    #    Without this, Celery redelivers them on next worker restart.
+    try:
+        r.delete("unacked")
+        r.delete("unacked_index")
     except Exception:
         pass
 

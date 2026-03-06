@@ -1182,6 +1182,10 @@ def run_compilation_task(self, session_id: str) -> dict:
             resource.setrlimit(resource.RLIMIT_CPU,   (cpu_soft, cpu_hard))
             resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_OUTPUT_GB * 1024 ** 3, MAX_OUTPUT_GB * 1024 ** 3))
 
+    def _preexec():
+        os.setsid()  # put process in its own process group so killpg kills all children
+        _apply_limits()
+
     try:
         proc = subprocess.Popen(
             ["python3", "-u", str(script_path)],
@@ -1190,7 +1194,7 @@ def run_compilation_task(self, session_id: str) -> dict:
             text=True,
             cwd=str(session_dir),
             env=safe_env,
-            preexec_fn=_apply_limits if sys.platform == "linux" else None,
+            preexec_fn=_preexec if sys.platform == "linux" else None,
         )
     except Exception as e:
         raise RuntimeError(f"Failed to start subprocess: {e}") from e
@@ -1234,7 +1238,12 @@ def run_compilation_task(self, session_id: str) -> dict:
             if _stop_redis:
                 try:
                     if _stop_redis.get("worker:stop"):
-                        proc.kill()
+                        # Kill entire process group (Python + TF threads + children)
+                        try:
+                            import signal
+                            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                        except Exception:
+                            proc.kill()  # fallback
                         _stop_redis.delete("worker:stop")
                         _killed.set()
                         return
@@ -1359,7 +1368,11 @@ def run_compilation_task(self, session_id: str) -> dict:
     try:
         proc.wait(timeout=MAX_TRAINING_MINUTES * 60)
     except subprocess.TimeoutExpired:
-        proc.kill()
+        try:
+            import signal
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except Exception:
+            proc.kill()
         err = f"Compilation timed out ({MAX_TRAINING_MINUTES} minute limit)"
         self.update_state(state="FAILURE", meta={"error": err, "exc_type": "RuntimeError", "exc_message": err})
         raise RuntimeError(err)
