@@ -908,6 +908,85 @@ def patch_tf_float_cast(code: str) -> str:
     return code
 
 
+def patch_tf_distributions(code: str) -> str:
+    """Replace tf.distributions.Normal / tensorflow.distributions.Normal (removed in TF2)
+    with a minimal inline implementation using TF math.
+
+    tensorflow_probability may not be installed, so we provide a drop-in class
+    _TFNormalDist that supports .log_prob() and .sample() via pure TF ops.
+    """
+    # Patterns to match any variant the model might write
+    dist_pattern = re.compile(
+        r'\b(?:tensorflow|tf)(?:\.keras)?\.distributions\.Normal\b'
+    )
+    if not dist_pattern.search(code):
+        return code
+
+    helper = '''
+class _TFNormalDist:
+    """Minimal Normal distribution using pure TensorFlow ops (no tensorflow_probability needed)."""
+    import math as _math
+    _LOG2PI = _math.log(2 * _math.pi)
+
+    def __init__(self, loc, scale):
+        import tensorflow as _tf
+        self.loc   = _tf.cast(loc,   _tf.float32)
+        self.scale = _tf.cast(scale, _tf.float32)
+
+    def log_prob(self, x):
+        import tensorflow as _tf
+        x = _tf.cast(x, _tf.float32)
+        var = self.scale ** 2
+        log_scale = _tf.math.log(self.scale + 1e-8)
+        return -0.5 * ((x - self.loc) ** 2 / (var + 1e-8) + self._LOG2PI) - log_scale
+
+    def sample(self):
+        import tensorflow as _tf
+        return self.loc + self.scale * _tf.random.normal(shape=_tf.shape(self.loc))
+
+    def entropy(self):
+        import tensorflow as _tf
+        import math as _math
+        return 0.5 + 0.5 * _math.log(2 * _math.pi) + _tf.math.log(self.scale + 1e-8)
+
+'''
+    # Inject helper after the last import line in the header block
+    lines = code.split('\n')
+    last_import_idx = 0
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith('import ') or stripped.startswith('from '):
+            last_import_idx = i
+    lines.insert(last_import_idx + 1, helper)
+    code = '\n'.join(lines)
+
+    # Replace all usages
+    code = dist_pattern.sub('_TFNormalDist', code)
+    return code
+
+
+def patch_gymnasium_int_cast(code: str) -> str:
+    """Fix numpy int64 values from gymnasium being passed to Keras Dense(units=...).
+
+    gymnasium's action_space.n returns a numpy.int64, not a Python int.
+    Keras 3 rejects non-Python-int values for the `units` argument.
+
+    Patches any assignment of the form:
+        self.<attr> = <expr>.action_space.n
+        self.<attr> = env.action_space.n
+        n_actions = env.action_space.n
+    to wrap the RHS with int(...).
+    """
+    if 'action_space' not in code:
+        return code
+    code = re.sub(
+        r'(=\s*)(\w[\w.]*\.action_space\.n)\b',
+        r'\1int(\2)',
+        code,
+    )
+    return code
+
+
 def patch_canonical_plots(code: str) -> str:
     """Remove all plt.savefig calls from the generated script and append
     a canonical, deterministic plot block at the end.
@@ -1046,6 +1125,8 @@ def run_compilation_task(self, session_id: str) -> dict:
     code = patch_safe_concatenate(code)
     code = patch_normalizer_name(code)
     code = patch_tf_float_cast(code)
+    code = patch_gymnasium_int_cast(code)
+    code = patch_tf_distributions(code)
     code = patch_canonical_plots(code)
     script_path.write_text(code)  # overwrite so subprocess runs the patched version
 
@@ -1094,7 +1175,8 @@ def run_compilation_task(self, session_id: str) -> dict:
     total_epochs  = 0
     stdout_lines: list[str] = []
     metrics_log:  list[dict] = []
-    tf_loaded = False
+    tf_loaded      = False
+    preprocessing  = False
 
     try:
         for raw_line in proc.stdout:  # type: ignore[union-attr]
@@ -1112,6 +1194,54 @@ def run_compilation_task(self, session_id: str) -> dict:
                     })
                     continue
 
+            # Preprocessing / data loading — detect common script output patterns
+            if tf_loaded and not preprocessing and not current_epoch:
+                low = line.lower()
+                if any(tok in low for tok in (
+                    "loading", "loaded", "reading", "dataset", "features",
+                    "samples", "rows", "bars", "indicators", "preprocessing",
+                    "extracting", "preparing", "train:", "val:", "test:",
+                )):
+                    preprocessing = True
+                    self.update_state(state="PROGRESS", meta={
+                        "step"    : "Preprocessing data…",
+                        "progress": 13,
+                    })
+
+            # Detect "[STAGE N]" style output from custom training scripts
+            stage_m = re.match(r'\[STAGE\s+(\d+)\]', line)
+            if stage_m:
+                stage_num = int(stage_m.group(1))
+                if stage_num == 1:
+                    preprocessing = True
+                    self.update_state(state="PROGRESS", meta={
+                        "step"    : "Preprocessing data…",
+                        "progress": 13,
+                    })
+                elif stage_num == 2:
+                    self.update_state(state="PROGRESS", meta={
+                        "step"    : "Building model…",
+                        "progress": 22,
+                    })
+                elif stage_num >= 3:
+                    self.update_state(state="PROGRESS", meta={
+                        "step"    : "Building model…",
+                        "progress": 24,
+                    })
+                continue
+
+            # Detect box-style epoch headers: ╔══ EPOCH   1/50 ══╗
+            box_epoch_m = re.search(r'EPOCH\s+(\d+)/(\d+)', line)
+            if box_epoch_m:
+                current_epoch = int(box_epoch_m.group(1))
+                total_epochs  = int(box_epoch_m.group(2))
+                progress = max(26, min(90, int(26 + 64 * (current_epoch - 1) / max(total_epochs, 1))))
+                self.update_state(state="PROGRESS", meta={
+                    "step"    : f"Epoch {current_epoch}/{total_epochs}",
+                    "progress": progress,
+                })
+                continue
+
             # Detect "Epoch N/T" header
             em = _EPOCH_NUM_RE.match(line)
             if em:
@@ -1120,7 +1250,7 @@ def run_compilation_task(self, session_id: str) -> dict:
                 if current_epoch == 1:
                     self.update_state(state="PROGRESS", meta={
                         "step"    : "Building model…",
-                        "progress": 15,
+                        "progress": 22,
                     })
                 progress = max(18, min(90, int(18 + 72 * (current_epoch - 1) / max(total_epochs, 1))))
                 self.update_state(state="PROGRESS", meta={
@@ -1160,7 +1290,9 @@ def run_compilation_task(self, session_id: str) -> dict:
         proc.wait(timeout=MAX_TRAINING_MINUTES * 60)
     except subprocess.TimeoutExpired:
         proc.kill()
-        raise RuntimeError(f"Compilation timed out ({MAX_TRAINING_MINUTES} minute limit)")
+        err = f"Compilation timed out ({MAX_TRAINING_MINUTES} minute limit)"
+        self.update_state(state="FAILURE", meta={"error": err, "exc_type": "RuntimeError", "exc_message": err})
+        raise RuntimeError(err)
 
     keras_files = list(output_dir.glob("*.keras"))
 
@@ -1182,7 +1314,9 @@ def run_compilation_task(self, session_id: str) -> dict:
         tail_lines = stdout_lines[-50:]
         combined = col_lines + ([] if col_lines and col_lines[-1] in tail_lines else tail_lines)
         error_msg = "\n".join(dict.fromkeys(combined)) or "Unknown error"
-        raise RuntimeError(f"Script failed:\n{error_msg}")
+        full_error = f"Script failed:\n{error_msg}"
+        self.update_state(state="FAILURE", meta={"error": full_error, "exc_type": "RuntimeError", "exc_message": full_error})
+        raise RuntimeError(full_error)
 
     if not keras_files:
         raise FileNotFoundError("No .keras files produced — ensure the script calls model.save('<name>.keras')")

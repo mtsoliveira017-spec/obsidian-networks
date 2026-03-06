@@ -680,7 +680,7 @@ async def revoke_task(task_id: str):
     """Revoke a running Celery task (best-effort — kills the worker process if possible)."""
     from celery.result import AsyncResult
     try:
-        AsyncResult(task_id, app=celery_app).revoke(terminate=True, signal="SIGTERM")
+        AsyncResult(task_id, app=celery_app).revoke(terminate=True, signal="SIGKILL")
     except Exception:
         pass
     return {"ok": True}

@@ -234,18 +234,19 @@ interface CompileState {
 
 // ── Stage definitions ──────────────────────────────────────────────────────
 const STAGES = [
-  { key: 'queue',   label: 'Queued',    maxProgress: 5   },
-  { key: 'loading', label: 'Loading',   maxProgress: 15  },
-  { key: 'build',   label: 'Building',  maxProgress: 18  },
-  { key: 'train',   label: 'Training',  maxProgress: 91  },
-  { key: 'saving',  label: 'Saving',    maxProgress: 100 },
+  { key: 'queue',    label: 'Queued',        maxProgress: 5   },
+  { key: 'loading',  label: 'Loading',       maxProgress: 12  },
+  { key: 'preproc',  label: 'Preprocessing', maxProgress: 20  },
+  { key: 'build',    label: 'Building',      maxProgress: 25  },
+  { key: 'train',    label: 'Training',      maxProgress: 91  },
+  { key: 'saving',   label: 'Saving',        maxProgress: 100 },
 ]
 
 function stepToStage(step: string, progress: number): number {
-  if (step.includes('Saving'))                                    return 4
-  if (step.includes('Evaluating'))                                return 4
-  if (step.startsWith('Epoch') || progress > 18)                  return 3
-  if (step.includes('Building'))                                  return 2
+  if (step.includes('Saving') || step.includes('Evaluating'))     return 5
+  if (step.startsWith('Epoch') || progress >= 25)                 return 4
+  if (step.includes('Building'))                                  return 3
+  if (step.includes('Preprocessing') || step.includes('Loading data') || step.includes('features')) return 2
   if (step.includes('Loading'))                                   return 1
   return 0
 }
@@ -272,7 +273,7 @@ function CompileRunningState({
 
   // Track when training stage began (for epoch rate + ETA)
   useEffect(() => {
-    if (stageIdx === 3 && trainStartRef.current === null) {
+    if (stageIdx === 4 && trainStartRef.current === null) {
       trainStartRef.current = Date.now()
     }
   }, [stageIdx])
@@ -300,7 +301,7 @@ function CompileRunningState({
     return { epochRate: rateStr, eta: etaStr }
   }, [metrics, elapsed]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const isEarlyStage = stageIdx < 3
+  const isEarlyStage = stageIdx < 4
 
   return (
     <div className="rounded-lg border border-[#39FF14]/20 bg-[#39FF14]/3 p-4 space-y-4 relative overflow-hidden">
@@ -368,7 +369,7 @@ function CompileRunningState({
       </div>
 
       {/* Training progress row — visible during training and saving */}
-      {stageIdx >= 3 && metrics.length > 0 && (() => {
+      {stageIdx >= 4 && metrics.length > 0 && (() => {
         const last = metrics[metrics.length - 1]
         return (
           <div className="flex items-center justify-between text-[10px] text-zinc-500 border-t border-zinc-800/60 pt-2">
@@ -382,7 +383,7 @@ function CompileRunningState({
       })()}
 
       {/* Stage-specific status hint */}
-      {stageIdx === 4 && (
+      {stageIdx === 5 && (
         <div className="flex items-center gap-1.5">
           <Loader2 className="h-3 w-3 text-zinc-600 animate-spin" />
           <span className="text-[10px] text-zinc-600 animate-pulse">
@@ -394,7 +395,10 @@ function CompileRunningState({
         <div className="flex items-center gap-1.5">
           <Loader2 className="h-3 w-3 text-zinc-600 animate-spin" />
           <span className="text-[10px] text-zinc-600 animate-pulse">
-            {stageIdx === 0 ? 'Waiting for worker…' : 'Initialising runtime, this can take 30–60s…'}
+            {stageIdx === 0 ? 'Waiting for worker…' :
+             stageIdx === 1 ? 'Initialising runtime, this can take 30–60s…' :
+             stageIdx === 2 ? `${compile.step || 'Preprocessing data…'}` :
+             compile.step || 'Building model…'}
           </span>
         </div>
       )}
