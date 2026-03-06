@@ -478,7 +478,7 @@ function CompileSection({
 
     const result = await triggerCompile(sessionId)
     if (!result) {
-      setCompile({ phase: 'error', progress: 0, step: '', error: 'Failed to start compilation' })
+      setCompile({ phase: 'error', progress: 0, step: '', detail: null, error: 'Failed to start compilation' })
       return
     }
 
@@ -490,7 +490,7 @@ function CompileSection({
         const res = await fetch(`/api/platform/progress-once/${result.task_id}`)
         if (!res.ok) return
         const data = await res.json() as {
-          state: string; progress: number; step: string; error?: string
+          state: string; progress: number; step: string; detail?: string; error?: string
           metrics?: EpochMetrics
         }
         if (data.state === 'SUCCESS') {
@@ -498,7 +498,7 @@ function CompileSection({
           pollRef.current = null
           taskIdRef.current = null
           setWasStarted(false)
-          setCompile({ phase: 'idle', progress: 100, step: 'Done', error: null })
+          setCompile({ phase: 'idle', progress: 100, step: 'Done', detail: null, error: null })
           onCompileSuccess()
         } else if (data.state === 'FAILURE') {
           clearInterval(pollRef.current!)
