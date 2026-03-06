@@ -1242,8 +1242,8 @@ def run_compilation_task(self, session_id: str) -> dict:
                     })
                 continue
 
-            # Detect box-style epoch headers: ╔══ EPOCH   1/50 ══╗
-            box_epoch_m = re.search(r'EPOCH\s+(\d+)/(\d+)', line)
+            # Detect box-style epoch headers: ╔══ EPOCH   1/50 ══╗  OR  Update 1/50
+            box_epoch_m = re.search(r'(?:EPOCH|Update)\s+(\d+)/(\d+)', line)
             if box_epoch_m:
                 current_epoch = int(box_epoch_m.group(1))
                 total_epochs  = int(box_epoch_m.group(2))
